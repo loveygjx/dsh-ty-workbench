@@ -1,0 +1,60 @@
+{
+  "name": "@local/dsh-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "个人工作台：资产评估项目管理与工时、考证学习规划与考试提醒、自选股行情与买卖点提醒",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "report-format.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "tianyuan.js",
+    "cli-auth.js",
+    "export-workflow.js",
+    "data/**",
+    "scanner.js",
+    "scan_kb.py",
+    "build_wiki.py",
+    "topic_digest.py",
+    "lint_wiki.py",
+    "library.js",
+    "kbqa.js",
+    "parse_doc.py",
+    "equity_import.py",
+    "finance_import.py",
+    "folders.js",
+    "archive.js",
+    "tianyuan-web.js",
+    "report-ego.js",
+    "tianyuan-session.js",
+    "tianyuan-session.test.js"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-sidebar-browser"
+      ]
+    }
+  }
+}

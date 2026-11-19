@@ -1,0 +1,600 @@
+[
+  {
+    "name": "get_my_projects",
+    "group": "项目与人员",
+    "mode": "read",
+    "usedBy": true,
+    "description": "获取当前用户的项目列表",
+    "required": [],
+    "props": []
+  },
+  {
+    "name": "get_project_context",
+    "group": "项目与人员",
+    "mode": "read",
+    "usedBy": true,
+    "description": "根据项目ID获取评估项目详情和上下文信息",
+    "required": [
+      "projectId"
+    ],
+    "props": [
+      "projectId"
+    ]
+  },
+  {
+    "name": "prepare_add_project_participants",
+    "group": "项目与人员",
+    "mode": "preflight",
+    "usedBy": false,
+    "description": "按登录名、工号或完整姓名精确查找人员，读取当前项目参与人员并生成添加预览。本工具不会修改项目；姓名存在歧义时会返回候选人员。",
+    "required": [
+      "projectId",
+      "participantIdentifiers"
+    ],
+    "props": [
+      "projectId",
+      "participantIdentifiers"
+    ]
+  },
+  {
+    "name": "execute_add_project_participants",
+    "group": "项目与人员",
+    "mode": "write",
+    "usedBy": false,
+    "description": "仅在用户已查看预检结果并明确确认后调用。执行时会复查项目上下文没有变化，再保留全部现有项目信息并追加参与人员。",
+    "required": [
+      "confirmationToken",
+      "confirmed",
+      "confirmedProjectId",
+      "confirmedParticipantUserNames"
+    ],
+    "props": [
+      "confirmationToken",
+      "confirmed",
+      "confirmedProjectId",
+      "confirmedParticipantUserNames"
+    ]
+  },
+  {
+    "name": "get_project_companies",
+    "group": "被评估公司与负责人",
+    "mode": "read",
+    "usedBy": true,
+    "description": "根据项目ID获取该项目的股权（公司）信息",
+    "required": [
+      "projectId"
+    ],
+    "props": [
+      "projectId"
+    ]
+  },
+  {
+    "name": "prepare_set_company_managers",
+    "group": "被评估公司与负责人",
+    "mode": "preflight",
+    "usedBy": false,
+    "description": "按项目 ID、公司 ID 和项目成员登录名/完整姓名预检公司负责人设置。该工具只读取数据并生成确认预览，不会修改公司负责人。",
+    "required": [
+      "projectId",
+      "companyIds",
+      "managerIdentifiers"
+    ],
+    "props": [
+      "projectId",
+      "companyIds",
+      "managerIdentifiers"
+    ]
+  },
+  {
+    "name": "execute_set_company_managers",
+    "group": "被评估公司与负责人",
+    "mode": "write",
+    "usedBy": false,
+    "description": "仅在用户已查看预检结果并明确确认后调用。执行时会复查公司负责人未在预检后变化，再调用估值后端覆盖设置公司负责人。",
+    "required": [
+      "confirmationToken",
+      "confirmed",
+      "confirmedProjectId",
+      "confirmedCompanyIds",
+      "confirmedManagerUserNames"
+    ],
+    "props": [
+      "confirmationToken",
+      "confirmed",
+      "confirmedProjectId",
+      "confirmedCompanyIds",
+      "confirmedManagerUserNames"
+    ]
+  },
+  {
+    "name": "prepare_remove_company_managers",
+    "group": "被评估公司与负责人",
+    "mode": "preflight",
+    "usedBy": false,
+    "description": "按项目 ID、公司 ID 和当前负责人登录名/完整姓名预检删除公司负责人。该工具只读取数据并生成确认预览，不会修改公司负责人；清空负责人时传 clearAll=true。",
+    "required": [
+      "projectId",
+      "companyIds"
+    ],
+    "props": [
+      "projectId",
+      "companyIds",
+      "managerIdentifiers",
+      "clearAll"
+    ]
+  },
+  {
+    "name": "execute_remove_company_managers",
+    "group": "被评估公司与负责人",
+    "mode": "write",
+    "usedBy": false,
+    "description": "仅在用户已查看删除预检结果并明确确认后调用。执行时会复查公司负责人未在预检后变化，再调用估值后端全量更新接口写入删除后的负责人列表。",
+    "required": [
+      "confirmationToken",
+      "confirmed",
+      "confirmedProjectId",
+      "confirmedClearAll",
+      "confirmedCompanyIds",
+      "confirmedRemovedManagerUserNames",
+      "confirmedRemainingManagerUserNames"
+    ],
+    "props": [
+      "confirmationToken",
+      "confirmed",
+      "confirmedProjectId",
+      "confirmedClearAll",
+      "confirmedCompanyIds",
+      "confirmedRemovedManagerUserNames",
+      "confirmedRemainingManagerUserNames"
+    ]
+  },
+  {
+    "name": "get_company_asset_based_approach_subjects",
+    "group": "资产基础法底稿",
+    "mode": "read",
+    "usedBy": false,
+    "description": "获取指定公司的资产基础法科目代码、标准名称及公司重命名名称。查询底稿前科目不明确时应先调用本工具。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "keyword"
+    ]
+  },
+  {
+    "name": "get_asset_based_approach_draft_data",
+    "group": "资产基础法底稿",
+    "mode": "read",
+    "usedBy": false,
+    "description": "根据项目 ID、公司 ID 和科目名称，分页查询该公司的资产基础法普通底稿数据。不要猜测科目代码；工具会根据标准科目名称或公司重命名名称自动解析代码。",
+    "required": [
+      "projectId",
+      "companyId",
+      "subjectName"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "subjectName",
+      "pageNum",
+      "limit"
+    ]
+  },
+  {
+    "name": "get_user_held_asset_based_approach_draft_edit_locks",
+    "group": "底稿编辑锁",
+    "mode": "read",
+    "usedBy": false,
+    "description": "查询指定用户跨项目持有且仍有效的资产基础法底稿（含注释文件）编辑锁。仅具有识别系统管理员角色的用户可以调用。",
+    "required": [
+      "holderUserId"
+    ],
+    "props": [
+      "holderUserId"
+    ]
+  },
+  {
+    "name": "release_asset_based_approach_draft_edit_locks_by_user",
+    "group": "底稿编辑锁",
+    "mode": "write",
+    "usedBy": false,
+    "description": "按锁持有者批量释放资产基础法底稿（含注释文件）编辑锁。ALL 释放该用户持有的全部锁且不能传锁组合；SELECTED 仅释放指定组合。该操作会改变编辑锁状态，仅在用户明确要求释放后调用，并且仅限识别系统管理员。",
+    "required": [
+      "holderUserId",
+      "releaseMode"
+    ],
+    "props": [
+      "holderUserId",
+      "releaseMode",
+      "lockItemList"
+    ]
+  },
+  {
+    "name": "force_release_asset_based_approach_draft_edit_locks_by_scope",
+    "group": "底稿编辑锁",
+    "mode": "write",
+    "usedBy": false,
+    "description": "按项目、公司、科目组合强制释放资产基础法底稿（含注释文件）编辑锁。该操作会释放组合对应的有效锁，不区分当前持有者；仅在用户明确要求释放后调用，并且仅限识别系统管理员。",
+    "required": [
+      "lockItemList"
+    ],
+    "props": [
+      "lockItemList"
+    ]
+  },
+  {
+    "name": "prepare_asset_based_approach_draft_import",
+    "group": "资产基础法底稿",
+    "mode": "preflight",
+    "usedBy": false,
+    "description": "校验 Agent 从 Excel 解析出的资产基础法底稿申报数据，检查目标公司、科目权限、字段格式和覆盖风险，并生成用户确认预览。本工具不会获取编辑锁，也不会保存任何数据。",
+    "required": [
+      "projectId",
+      "targetCompanyIds",
+      "sourceFileName",
+      "subjects"
+    ],
+    "props": [
+      "projectId",
+      "targetCompanyIds",
+      "sourceFileName",
+      "sourceFileSha256",
+      "subjects"
+    ]
+  },
+  {
+    "name": "execute_asset_based_approach_draft_import",
+    "group": "资产基础法底稿",
+    "mode": "write",
+    "usedBy": false,
+    "description": "仅在用户已查看预检工具返回的公司、科目、行数和覆盖清单并明确确认后调用。凭证为短期一次性凭证；执行时会重新校验权限和覆盖状态、获取全部编辑锁、按科目向多家公司写入并释放编辑锁。",
+    "required": [
+      "confirmationToken",
+      "confirmed"
+    ],
+    "props": [
+      "confirmationToken",
+      "confirmed"
+    ]
+  },
+  {
+    "name": "prepare_financial_statement_report_import",
+    "group": "财务报表",
+    "mode": "preflight",
+    "usedBy": false,
+    "description": "校验 Agent 从 Excel 等文件解析出的资产负债表或利润表数据，支持单体/合并口径。工具会读取新财务报表配置、项目历史期间、标准科目、科目对照表和已有报表，生成最终保存接口请求体和用户确认预览；本工具不会保存数据。",
+    "required": [
+      "projectId",
+      "companyId",
+      "statementType",
+      "reportMode",
+      "sheetList"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "sourceFileName",
+      "statementType",
+      "reportMode",
+      "missingSubjectPolicy",
+      "includeRequestBody",
+      "sheetList"
+    ]
+  },
+  {
+    "name": "execute_financial_statement_report_import",
+    "group": "财务报表",
+    "mode": "write",
+    "usedBy": false,
+    "description": "仅在用户已查看预检工具返回的导入目标、年度、科目数量、跳过行和最终保存请求体并明确确认后调用。凭证为短期一次性凭证；执行前会重新预检，确认最终请求体未变化后才调用后端保存接口。",
+    "required": [
+      "confirmationToken",
+      "confirmed"
+    ],
+    "props": [
+      "confirmationToken",
+      "confirmed"
+    ]
+  },
+  {
+    "name": "get_financial_statement_reports",
+    "group": "财务报表",
+    "mode": "read",
+    "usedBy": false,
+    "description": "读取某项目某公司的财务报表数据，支持资产负债表、利润表以及单体/合并口径。工具会按财务报表页面逻辑读取参数、科目模板和已有报表，返回模拟前端 SpreadJS 的工作表数据视图，也可返回后端原始数据。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "statementType",
+      "reportMode",
+      "view",
+      "includeEmptySubjects"
+    ]
+  },
+  {
+    "name": "save_financial_statement_config",
+    "group": "财务报表",
+    "mode": "write",
+    "usedBy": false,
+    "description": "保存指定项目和公司的财务报表参数设置，包括报表口径、报表类型、显示期数、币种和金额单位。只修改传入的配置字段；省略字段沿用当前值，当前值为空时使用前端默认值：单体、一般企业、4 期、人民币（ID 1）、元。不保存资产负债表或利润表明细。工具会先查询当前配置：若查询结果包含配置 id，则自动按更新提交；若没有 id，则自动按新增提交。无需传入 id；查询返回的币种名称会按前端逻辑转换为币种 ID。仅在用户明确要求新增或修改参数后调用；查询配置或币种列表失败时不会调用保存接口。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "reportMode",
+      "modeId",
+      "reportPeriodNum",
+      "currency",
+      "unit"
+    ]
+  },
+  {
+    "name": "get_project_file_list",
+    "group": "项目文件与明细表",
+    "mode": "read",
+    "usedBy": true,
+    "description": "获取当前用户可访问的指定评估项目文件列表，可按公司和关键词筛选。返回公司、目录路径、文件名称、大小、创建时间和创建人等信息。",
+    "required": [
+      "projectId"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "keyword",
+      "pageNum",
+      "pageSize"
+    ]
+  },
+  {
+    "name": "get_company_asset_based_approach_summary",
+    "group": "汇总表",
+    "mode": "read",
+    "usedBy": false,
+    "description": "获取指定项目、指定公司的资产基础法汇总表。返回结果会按前端 SpreadJS 页面补齐全部科目、展示层级和排序，并说明账面价值、评估价值、增值额、增值率及报表差异。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId"
+    ]
+  },
+  {
+    "name": "get_company_income_approach_summary",
+    "group": "汇总表",
+    "mode": "read",
+    "usedBy": false,
+    "description": "获取指定项目、指定公司的收益法汇总表。默认返回前端“预测期结果”对应的紧凑数据，可按模型设定、历史数据、未来预测、永续期预测、预测期结果选择展示内容，并限制返回层级；需要逐期间配置时可选择详细模式。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "sections",
+      "responseMode",
+      "maxLevel"
+    ]
+  },
+  {
+    "name": "get_company_market_approach_summary",
+    "group": "汇总表",
+    "mode": "read",
+    "usedBy": false,
+    "description": "获取指定项目、指定公司的市场法汇总表。除汇总接口外还会核验市场法底稿，区分真实零值、尚未填写、底稿缺失以及汇总值不一致。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId"
+    ]
+  },
+  {
+    "name": "get_project_summary",
+    "group": "汇总表",
+    "mode": "read",
+    "usedBy": false,
+    "description": "获取指定评估项目的项目汇总表。返回公司层级、股权比例、评估方法、整体评估原币价值、非整体评估本位币价值、最终评估价值及增值情况；可按公司主体、被投资单位或前端显示公司层级筛选。本工具只读取已有汇总结果，不触发刷新重算。",
+    "required": [
+      "projectId"
+    ],
+    "props": [
+      "projectId",
+      "parentCompanyIds",
+      "investeeCompanyIds",
+      "maxCompanyLevel"
+    ]
+  },
+  {
+    "name": "request_detail_table_export_api",
+    "group": "项目文件与明细表",
+    "mode": "read",
+    "usedBy": false,
+    "description": "为 tycpv-cli 明细表/申报表、估算二级文件和收益法二级文件下载转发受控的估值后端只读接口。收益法二级文件列表保留分页信息。业务 tk 只在 MCP server 内部使用，不返回给客户端。",
+    "required": [
+      "method",
+      "path"
+    ],
+    "props": [
+      "method",
+      "path",
+      "params",
+      "body"
+    ]
+  },
+  {
+    "name": "get_report_config",
+    "group": "报告配置与导出",
+    "mode": "read",
+    "usedBy": false,
+    "description": "读取某项目、公司和报告类型的报告配置基本信息及命名参数。",
+    "required": [
+      "projectId",
+      "companyId",
+      "reportType"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "reportType"
+    ]
+  },
+  {
+    "name": "get_long_term_report_config",
+    "group": "报告配置与导出",
+    "mode": "read",
+    "usedBy": false,
+    "description": "读取指定公司的长投说明配置 ID、基本信息、财务信息和核实信息。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId"
+    ]
+  },
+  {
+    "name": "get_report_config_items",
+    "group": "报告配置与导出",
+    "mode": "read",
+    "usedBy": false,
+    "description": "查询报告配置节点树，可读取有效节点、回收站节点或条件过滤未通过的节点。",
+    "required": [
+      "projectId",
+      "companyId",
+      "reportType"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "reportType",
+      "itemSet"
+    ]
+  },
+  {
+    "name": "get_report_variables",
+    "group": "报告配置与导出",
+    "mode": "read",
+    "usedBy": false,
+    "description": "按变量名列表查询某项目和公司当前的报告变量值；可选择表格型变量是否以结构化对象返回。",
+    "required": [
+      "projectId",
+      "companyId",
+      "variables"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "variables",
+      "structuredTableVariable"
+    ]
+  },
+  {
+    "name": "export_report_full_json",
+    "group": "报告配置与导出",
+    "mode": "read",
+    "usedBy": false,
+    "description": "导出指定项目、公司和报告类型的 ReportFullExportVO JSON，包括报告基础信息、通过节点条件校验的有效节点树、去除格式但不填充变量值的节点正文及页眉页脚。节点条件配置会保留，条件校验未通过的节点及其子树不会导出。成功结果是可原样保存的裸 JSON，并附带建议文件名元数据。",
+    "required": [
+      "projectId",
+      "companyId",
+      "reportType"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "reportType"
+    ]
+  },
+  {
+    "name": "download_report_attachment",
+    "group": "报告配置与导出",
+    "mode": "read",
+    "usedBy": false,
+    "description": "根据附件 ID 下载单个通用附件。该接口可下载报告附件、资产基础法估算二级文件附件、收益法二级文件附件及其他 valuation 通用附件；成功结果包含文件元数据和标准 MCP embedded resource blob，Agent 应将 blob 按 Base64 解码后原样保存。",
+    "required": [
+      "attachId"
+    ],
+    "props": [
+      "attachId"
+    ]
+  },
+  {
+    "name": "get_estimation_second_file_list",
+    "group": "二级文件",
+    "mode": "read",
+    "usedBy": false,
+    "description": "分页查询指定项目和资产基础法科目下的估算二级文件列表。支持按文件名、评估方法、公司、创建人筛选，并返回后端分页信息。",
+    "required": [
+      "projectId",
+      "subjectCode"
+    ],
+    "props": [
+      "projectId",
+      "subjectCode",
+      "fileName",
+      "valuationTypeList",
+      "valuationTypeListJson",
+      "companyIdList",
+      "createUserName",
+      "creatorId",
+      "actorUserName",
+      "pageNum",
+      "limit"
+    ]
+  },
+  {
+    "name": "get_income_second_file_list",
+    "group": "二级文件",
+    "mode": "read",
+    "usedBy": false,
+    "description": "分页查询指定项目和公司的收益法通用二级文件列表。支持按二级文件名称、分组、节点、创建人和更新人筛选；列表结果包含二级文件 ID、名称、附件 URI 等信息。若需要附件 ID，请使用返回的二级文件 ID继续调用收益法二级文件详情 Tool，再调用通用附件下载 Tool 下载文件。",
+    "required": [
+      "projectId",
+      "companyId"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "name",
+      "groupName",
+      "nodeId",
+      "creatorUserName",
+      "updaterUserName",
+      "pageNum",
+      "limit"
+    ]
+  },
+  {
+    "name": "get_income_second_file_detail",
+    "group": "二级文件",
+    "mode": "read",
+    "usedBy": false,
+    "description": "查询指定项目、公司和收益法二级文件 ID 的详情，返回二级文件名称、主附件 attachId、附件 URI 以及单元格附件列表。拿到 attachId 后可调用通用附件下载 Tool 下载收益法二级文件主附件。",
+    "required": [
+      "projectId",
+      "companyId",
+      "auxiliaryTableId"
+    ],
+    "props": [
+      "projectId",
+      "companyId",
+      "auxiliaryTableId"
+    ]
+  }
+]
