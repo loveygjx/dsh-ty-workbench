@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { readFile, mkdir, mkdtemp, writeFile, rm, readdir, copyFile, rename, realpath, stat, link } from 'node:fs/promises';
 import { writeFileSync, existsSync, statSync } from 'node:fs';
-import { join, sep, dirname, relative, isAbsolute } from 'node:path';
+import { join, sep, dirname, relative, isAbsolute, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -12,7 +12,8 @@ import { openShell } from './opener.js';
 import * as ty from './tianyuan.js';
 import * as tyWeb from './tianyuan-web.js';
 import * as tySession from './tianyuan-session.js';
-import { buildReportScript, buildProbeScript, buildCompaniesScript, REPORT_SENTINEL } from './report-ego.js';
+import { buildReportScript, buildProbeScript, buildCompaniesScript, buildLoginScript, REPORT_SENTINEL } from './report-ego.js';
+import * as rb from './report-browser.js';
 import { createCliAuth } from './cli-auth.js';
 import { runManualWorkflow } from './export-workflow.js';
 const cliAuth = createCliAuth();
@@ -359,7 +360,7 @@ const PYTHON_CANDIDATES = [
 ].filter(Boolean);
 const MINERU_CMD = process.env.DSH_WORKBENCH_MINERU || join(homedir(), 'AppData', 'Roaming', 'npm', 'mineru-open-api.cmd');
 
-function runCli(exe, args, timeoutMs) {
+function runCli(exe, args, timeoutMs, extraEnv) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.MINERU_TOKEN;
@@ -367,6 +368,7 @@ function runCli(exe, args, timeoutMs) {
     // 强制 UTF-8 后 JSON 里的中文才不会被写坏（脚本本身也用了 ASCII 转义兜底）。
     env.PYTHONIOENCODING = 'utf-8';
     env.PYTHONUTF8 = '1';                  // 本机注入过期的 MINERU_TOKEN，会盖掉 config.yaml 里的有效 token
+    if (extraEnv) Object.assign(env, extraEnv);
     const isBatch = /\.(cmd|bat)$/i.test(exe);
     const cmd = isBatch ? (process.env.ComSpec || 'cmd.exe') : exe;
     const argv = isBatch ? ['/c', exe, ...args] : args;
@@ -416,6 +418,91 @@ async function runNativeEngine(params) {
     } catch (e) { lastErr = e; }
   }
   return { ok: false, code: 'ENGINE_FAIL', msg: String((lastErr && lastErr.message) || '引擎执行失败') };
+}
+
+// 给已下载的原生 docx 套用「报告格式」页的表格参数（原地改写，内容不动）。
+// 复用「评估工具箱」的表格设置脚本（format_word_tables.py）——它对表头识别、
+// 列宽分配、边框、对齐的处理都经过实机验证，比自研算法可靠。
+// 脚本自己会返回 {"ok":false,...}，调用方把原因原样显示，不假装成功。
+function toolboxTableFormatScript() {
+  const explicit = process.env.TIANYUAN_TABLE_FORMAT_SCRIPT;
+  if (explicit && existsSync(explicit)) return explicit;
+  const home = homedir();
+  const guesses = [
+    join(home, '.tianyuan-workbench/projects/天源评估系统/skills/table-format/scripts/format_word_tables.py'),
+    join(home, 'Library/Application Support/天源评估系统/skills/table-format/scripts/format_word_tables.py'),
+  ];
+  for (const g of guesses) if (existsSync(g)) return g;
+  return null;
+}
+
+// 把「报告格式」页的 table 段翻译成工具箱脚本认的 FORMAT_RULES 键。
+// 只映射语义完全对应的项，其余留空让工具箱用自己的预设——不做无依据的猜测。
+function toolboxRulesFromReportFormat(cfg) {
+  const out = {};
+  const t = (cfg && cfg.table) || {};
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const sz = num(t.size_half_points);
+  if (sz && sz > 0) out.fontSizePt = sz / 2;
+  if (typeof t.font === 'string' && t.font.trim()) out.fontEastAsia = t.font.trim();
+  if (typeof t.ascii_font === 'string' && t.ascii_font.trim()) out.fontLatin = t.ascii_font.trim();
+  const minRow = num(t.min_row_height_twips);
+  if (minRow && minRow > 0) out.minimumRowHeightCm = +(minRow / 567).toFixed(3); // 1cm = 567 twips
+  if (typeof t.repeat_header === 'boolean') out.repeatHeader = t.repeat_header;
+  if (typeof t.numeric_align_right === 'boolean') out.numericAlignment = t.numeric_align_right ? 'right' : 'left';
+  if (typeof t.autofit === 'boolean') out.fitToWindow = t.autofit;
+  if (typeof t.single_line === 'boolean') out.lineSpacing = t.single_line ? 1.0 : 1.5;
+  if (typeof t.clear_shading === 'boolean') out.clearShading = t.clear_shading;
+  const b = t.border || {};
+  const pt = (edge) => { const s = num((b[edge] || {}).size); return s && s > 0 ? s / 8 : null; }; // sz 单位 1/8 磅
+  const topPt = pt('top'), botPt = pt('bottom');
+  if (topPt || botPt) out.topBottomBorderPt = Math.max(topPt || 0, botPt || 0);
+  const inHPt = pt('insideH'), inVPt = pt('insideV');
+  if (inHPt || inVPt) out.insideBorderPt = Math.max(inHPt || 0, inVPt || 0);
+  const side = b.left || b.right;
+  if (side && String(side.style || '').toLowerCase() === 'nil') out.leftRightBorder = 'none';
+  return out;
+}
+
+async function applyDocxTableFormat(file) {
+  const tbx = toolboxTableFormatScript();
+  if (!tbx) throw new Error('没有找到「评估工具箱」的表格设置脚本 format_word_tables.py');
+  let rules = {};
+  try {
+    const { readReportFormat } = await import('./report-format.js');
+    rules = toolboxRulesFromReportFormat(await readReportFormat());
+  } catch (e) { rules = {}; } // 配置读不到就全用工具箱预设
+  const env = { ...process.env, PYTHONUNBUFFERED: '1' };
+  if (Object.keys(rules).length) env.TIANYUAN_TABLE_FORMAT_CONFIG = JSON.stringify(rules);
+
+  let lastErr = null;
+  for (const py of PYTHON_CANDIDATES) {
+    try {
+      const r = await runCli(py, [tbx, file], 180000, env);
+      // 脚本按 JSON Lines 输出，最后一条 saved 就是结果
+      const lines = String(r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+      let saved = null; let failed = null;
+      for (const line of lines) {
+        let j = null; try { j = JSON.parse(line); } catch (e) { continue; }
+        if (j.event === 'saved') saved = j;
+        if (j.event === 'failed') failed = j;
+      }
+      if (r.code !== 0 || !saved) {
+        lastErr = new Error(failed ? (failed.reason || '表格设置失败') : ((r.stderr || '').slice(-300) || ('python 退出码 ' + r.code)));
+        continue;
+      }
+      return {
+        ok: true,
+        mode: 'toolbox',
+        tables: saved.tableCount || 0,
+        cells: saved.clearedShadingCells || 0,
+        skippedAttachment: saved.skippedAttachmentTables || 0,
+        skippedFormatted: saved.skippedFormattedTables || 0,
+        rules,
+      };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('没有可用的 python（需要 python-docx 与 lxml）');
 }
 
 // 股权信息批量导入 / 模板生成：交给 equity_import.py（openpyxl）。找不到 openpyxl 时
@@ -900,6 +987,486 @@ async function getBuffer(url, headers, timeoutMs) {
   } finally { clearTimeout(timer); }
 }
 
+// ---------- 天源导出（HTTP 路由与 agent 工具共用的唯一实现） ----------
+// 同一份逻辑既要给「工作 → 天源项目 → 导出」按钮用，也要给助手的工作台工具用。
+// 按 dsh-doc 的 user-actions 约定：一处实现、两个调用方，不各写一份。
+// 返回 { status, body }：status 是给路由用的 HTTP 码，工具只读 body。
+const TY_EXPORT_KINDS = {
+  detail: { sub: 'export-asset-detail-table', fmt: 'appraisal-detail-print-format/scripts/adjust_appraisal_detail_print.py', label: '明细表' },
+  declare: { sub: 'export-asset-declare-table', fmt: 'appraisal-declaration-print-format/scripts/adjust_appraisal_declaration_print.py', label: '申报表' },
+};
+function tyExportSkillsDir() {
+  return [
+    process.env.TIANYUAN_PRINT_SKILLS_DIR,
+    join(homedir(), '.tianyuan-workbench', 'dependencies', '天源评估系统', 'print-format-skills'),
+    join(homedir(), 'Projects', 'tianyuan-workbench-release-20261001', 'skills'),
+  ].filter(Boolean).find(c => existsSync(join(c, 'asset-link-restore', 'scripts', 'restore_links.py')));
+}
+async function walkXlsxFiles(dir, out) {
+  let entries = [];
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch (e) { return; }
+  for (const ent of entries) {
+    const p = join(dir, ent.name);
+    if (ent.isDirectory()) await walkXlsxFiles(p, out);
+    else if (/\.xlsx$/i.test(ent.name)) out.add(p);
+  }
+}
+async function runTyExport(b) {
+  const KINDS = TY_EXPORT_KINDS;
+  const skillsDir = tyExportSkillsDir();
+  const walkXlsx = walkXlsxFiles;   // 局部别名，下方沿用了原路由里的变量名
+  let outDir = null;
+  try {
+    const jobId = /^[A-Za-z0-9_-]{6,64}$/.test(String(b.jobId || '')) ? String(b.jobId) : '';
+    const setProg = patch => { if (!jobId) return; if (exportProgress.size > 50) { let oldest = null; for (const [k, v] of exportProgress) if (!oldest || v.at < oldest.at) oldest = { k, at: v.at }; if (oldest) exportProgress.delete(oldest.k); } exportProgress.set(jobId, { at: Date.now(), ...patch }); };
+    const clearProg = () => { if (jobId) exportProgress.delete(jobId); };
+    const cfg = KINDS[String(b.kind || '')];
+    if (!cfg) return { status: 400, body: { ok: false, error: 'kind 必须是 detail（明细表）或 declare（申报表）' } };
+    const projectId = String(b.projectId || '').trim();
+    if (!/^\d+$/.test(projectId)) return { status: 400, body: { ok: false, error: 'projectId 必须为天源数字项目 ID' } };
+    const companyIds = String(b.companyIds || '').trim();
+    if (companyIds && !/^\d+(,\d+)*$/.test(companyIds)) return { status: 400, body: { ok: false, error: 'companyIds 必须为数字逗号列表' } };
+    // 浏览器插件的申报表流程只做申报表格式整理；公式恢复用于明细表。
+    const restoreFormulas = b.kind === 'detail' && b.restoreFormulas !== false;
+    const applyFormat = b.applyFormat !== false;
+    if (!restoreFormulas && !applyFormat) return { status: 400, body: { ok: false, error: '恢复公式与设置格式至少启用一项' } };
+    if (!skillsDir) return { status: 500, body: { ok: false, error: '未找到整理脚本目录（asset-link-restore/restore_links.py）；可设 TIANYUAN_PRINT_SKILLS_DIR 指向 print-format-skills' } };
+    const linkScript = join(skillsDir, 'asset-link-restore', 'scripts', 'restore_links.py');
+    const fmtScript = join(skillsDir, cfg.fmt);
+    if (applyFormat && !existsSync(fmtScript)) return { status: 500, body: { ok: false, error: '未找到格式脚本：' + fmtScript } };
+
+    const tycpv = [process.env.TYCPV_BIN, '/usr/local/bin/tycpv', '/opt/homebrew/bin/tycpv'].find(x => x && existsSync(x)) || 'tycpv';
+    const pyBin = existsSync(WORKBENCH_VENV_PY) ? WORKBENCH_VENV_PY : 'python3';
+    const verifyZip = (p) => runCli(pyBin, ['-c', 'import sys,zipfile; sys.exit(0 if zipfile.ZipFile(sys.argv[1]).testzip() is None else 2)', p], 120000);
+    const tail = (s, n) => String(s || '').trim().split(/\r?\n/).filter(Boolean).slice(-n).join(' ｜ ');
+
+    const st0 = await store.config();
+    const folder = safeFolderName((String(b.projectCode || '') + ' ' + String(b.projectName || '')).trim()) || projectId;
+    let outputRoot = join(st0.dir, '导出');
+    if (b.outputDir != null && b.outputDir !== '') {
+      if (typeof b.outputDir !== 'string' || !isAbsolute(b.outputDir)) return { status: 400, body: { ok: false, error: '输出目录必须是已存在的绝对路径' } };
+      try {
+        outputRoot = await realpath(b.outputDir);
+        if (!(await stat(outputRoot)).isDirectory()) throw new Error('not a directory');
+      } catch (_) { return { status: 400, body: { ok: false, error: '输出目录不存在或不是文件夹' } }; }
+    }
+    // 先建立父目录，再独占建立批次，避免误用已存在的批次。
+    const batchId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + Math.random().toString(36).slice(2, 10);
+    const batchParent = join(outputRoot, folder, cfg.label);
+    await mkdir(batchParent, { recursive: true });
+    outDir = join(batchParent, batchId);
+    await mkdir(outDir);
+    rememberExportBatch(await realpath(outDir));
+    setProg({ stage: 'export', msg: '正在调用 tycpv 导出（可能需要几分钟）…' });
+
+    const args = [cfg.sub, '-p', projectId, '-o', outDir];
+    if (companyIds) args.push('-c', companyIds);
+    const cli = await runCli(tycpv, args, 15 * 60 * 1000);
+    if (cli.code !== 0) {
+      clearProg();
+      const why = tail(cli.stderr, 3) || tail(cli.stdout, 3);
+      if (/缺少 MCP token|本地登录.*过期/i.test(why)) return { status: 401, body: { ok: false, outDir, error: 'CLI 没有可用凭据。请到「工作 → 连接设置」点击「授权 CLI」并完成浏览器登录；MCP 和 CLI 授权相互独立。' } };
+      return { status: 502, body: { ok: false, outDir, error: 'tycpv 导出失败（退出码 ' + cli.code + '）。请检查 CLI 授权和项目权限。' } };
+    }
+    const after = new Set(); await walkXlsx(outDir, after);
+    const exported = [...after];
+    if (!exported.length) { clearProg(); return { status: 500, body: { ok: false, outDir, error: 'tycpv 已退出但目录里没有新 xlsx：' + outDir } }; }
+    setProg({ stage: 'process', done: 0, total: exported.length, file: '', msg: '开始逐个工作簿整理…' });
+
+    const results = [];
+    for (const [fi, src] of exported.entries()) {
+      // basename 而不是切 '/'：Windows 反斜杠路径会切出带盘符的非法文件名。
+      const base = basename(src);
+      const dot = base.lastIndexOf('.');
+      const stem = dot > 0 ? base.slice(0, dot) : base;
+      const ext = dot > 0 ? base.slice(dot) : '';
+      const dir = dirname(src);
+      const stageStem = '.' + stem + '.tianyuan-workflow-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      const stage = join(dir, stageStem + ext);
+      const reportTemp = join(dir, stageStem + '_链接恢复对比报告.xlsx');
+      const stages = [];
+      let reportPath = null, reportLinked = false;
+      setProg({ stage: 'process', done: fi, total: exported.length, file: stem, msg: '正在整理：' + stem });
+      try {
+        await copyFile(src, stage);
+        if (restoreFormulas) {
+          const r = await runCli(pyBin, [linkScript, stage], 5 * 60 * 1000);
+          if (r.code !== 0) throw new Error('恢复公式失败：' + (tail(r.stderr, 3) || tail(r.stdout, 3) || ('退出码 ' + r.code)));
+          const gen = join(dir, stageStem + '_链接恢复' + ext);
+          if (!existsSync(gen)) throw new Error('恢复公式没有产出：' + gen);
+          await rename(gen, stage);
+          stages.push('restore_formulas');
+          if (existsSync(reportTemp)) reportPath = join(dir, stem + '_链接恢复对比报告.xlsx');
+        }
+        if (applyFormat) {
+          const r = await runCli(pyBin, [fmtScript, stage, '--no-backup'], 5 * 60 * 1000);
+          if (r.code !== 0) throw new Error('设置格式失败：' + (tail(r.stderr, 3) || tail(r.stdout, 3) || ('退出码 ' + r.code)));
+          stages.push('apply_format');
+        }
+        const v = await verifyZip(stage);
+        if (v.code !== 0) throw new Error('文件校验失败（zip 结构异常）');
+        // 报告先以不覆盖方式发布；若工作簿提交失败，撤销本次报告发布。
+        if (reportPath) { await link(reportTemp, reportPath); reportLinked = true; }
+        await rename(stage, src);
+        if (reportLinked) { try { await rm(reportTemp); } catch (_) {} }
+        results.push({ ok: true, sourcePath: src, outputPath: src, reportPath, stages });
+      } catch (fe) {
+        if (reportLinked) { try { await rm(reportPath); } catch (_) {} }
+        try { if (existsSync(stage)) await rm(stage); } catch (e) {}
+        try { if (existsSync(reportTemp)) await rm(reportTemp); } catch (e) {}
+        results.push({ ok: false, sourcePath: src, reason: String((fe && fe.message) || fe) });
+      }
+    }
+    const successCount = results.filter(r => r.ok).length;
+    clearProg();
+    return {
+      status: 200,
+      body: {
+        ok: successCount > 0,
+        kind: String(b.kind || ''), label: cfg.label, projectId,
+        outDir, total: results.length, successCount, failedCount: results.length - successCount,
+        results,
+      },
+    };
+  } catch (e) {
+    return { status: 500, body: { ok: false, ...(outDir ? { outDir } : {}), error: String((e && e.message) || e) } };
+  }
+}
+
+// ---------- 助手对话（工作台页面内的浮动对话窗） ----------
+//
+// 设计取舍：**不在插件里自建 agent 循环**。
+// 工作台需要的只是「带工作台上下文的问答 + 少量确定性动作」，走 llm.stream 单轮最稳；
+// 自建 tool-call 循环风险很高——DeepSeek adapter 对 tool_use / tool_result 的配对顺序
+// 极其敏感（`dsh-llm-deepseek/lib/index.js` 里 tool_result 必须紧跟对应 tool_use，否则直接
+// 抛 `DeepSeek Messages tool calls need immediate results`），模型一旦漏调就整轮失败。
+// 所以：模型只负责解释、建议、写文案；真正动数据的操作仍然留在按钮和确定性命令里。
+const ASSISTANT_MAX_TURNS = 12;
+const ASSISTANT_MAX_CHARS = 8000;
+
+const ASSISTANT_SYSTEM = [
+  '你是「个人工作台」内置的助手，服务对象是一位资产评估师。',
+  '工作台里有：项目管理（承接→归档的阶段与工时）、文件库（项目资料检索与问答）、',
+  '天源评估系统对接（MCP 与 tycpv CLI 两条独立授权通道）、明细表/申报表导出、报告格式整理。',
+  '',
+  '规则：',
+  '1. 回答依据 = 下面给出的工作台上下文 + 你可以调用的只读工具返回结果 + 用户的话。上下文和工具结果都没写的具体数字，一律说「没有查到」，不要编。',
+  '2. 查天源系统的项目、公司、评估结论、汇总数据时，直接调用提供的只读工具（先 get_my_projects 找到项目 ID，再查公司、再查汇总），不要让用户自己去系统里查。',
+  '3. 你不执行任何写操作；提供的工具都是只读查询。用户要导出、改项目状态、改数据时，告诉他去哪个页面点哪个按钮。',
+  '4. 回答用中文，简洁，优先给结论和下一步动作，不要写客套话。',
+  '5. 涉及金额、日期、比例时原样引用工具结果或上下文里的值，不要换算或补全。',
+].join('\n');
+
+// 天源只读工具白名单：只放查询类 MCP 工具，写操作（execute_*/save_*/import）一律不放。
+// schema 直接写简化版 JSON Schema，宿主 adapter 会原样透传给 provider。
+const TY_TOOL_MAX_HOPS = 4;      // 一次提问最多跑几轮「模型→工具→模型」
+const TY_TOOL_MAX_CHARS = 12000; // 单个工具结果回填给模型的最大字符数
+const ASSISTANT_TOOLS = [
+  {
+    name: 'get_my_projects',
+    description: '列出当前账号在天源评估系统里的全部项目（含项目 ID、编号、名称、评估对象、状态）。回答任何天源相关问题的第一步。',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_project_companies',
+    description: '列出某个天源项目下的公司（股权/被评估单位）列表，返回公司数字 ID。需要先有项目 ID。',
+    parameters: { type: 'object', properties: { projectId: { type: 'integer', description: '天源数字项目 ID（get_my_projects 返回的 id）' } }, required: ['projectId'] },
+  },
+  {
+    name: 'get_project_summary',
+    description: '取天源项目汇总表：评估方法、整体评估价值、账面价值、增值额/增值率等合计数据。',
+    parameters: { type: 'object', properties: { projectId: { type: 'integer', description: '天源数字项目 ID' } }, required: ['projectId'] },
+  },
+  {
+    name: 'get_company_asset_based_approach_summary',
+    description: '取某公司在本项目下资产基础法的汇总：账面价值、评估价值、增值额、增值率。',
+    parameters: { type: 'object', properties: { projectId: { type: 'integer', description: '天源数字项目 ID' }, companyId: { type: 'integer', description: '公司数字 ID（get_project_companies 返回）' } }, required: ['projectId', 'companyId'] },
+  },
+];
+
+// 把 MCP 工具结果压成模型能吃下的一小段 JSON 文本。get_my_projects 原始返回 25KB+，必须先瘦身。
+function compactTyToolResult(name, res) {
+  let data = res && res.data;
+  if (data === null || data === undefined) {
+    const sc = res && res.structuredContent;
+    data = sc !== null && sc !== undefined ? sc : '';
+  }
+  if (name === 'get_my_projects' && Array.isArray(data)) {
+    data = data.slice(0, 100).map(p => ({
+      id: p && p.id,
+      projectName: p && p.projectName,
+      projectCode: p && p.projectCode,
+      assessmentObject: p && p.assessmentObject,
+      projectStatus: p && p.projectStatus,
+    }));
+  }
+  let text;
+  try { text = JSON.stringify(data); } catch (e) { text = String(data); }
+  if (text.length > TY_TOOL_MAX_CHARS) text = text.slice(0, TY_TOOL_MAX_CHARS) + '…（结果过长已截断）';
+  return JSON.stringify({ isError: !!(res && res.isError), data: text });
+}
+
+// 单个白名单工具的安全执行：名字必须在白名单内、参数必须是对象、异常兜底成错误文本。
+async function callTyToolSafe(ctx, call) {
+  const def = ASSISTANT_TOOLS.find(t => t.name === call.name);
+  if (!def) return JSON.stringify({ error: '该工具不在只读白名单内，已拒绝执行：' + String(call.name) });
+  let args = {};
+  try { args = typeof call.arguments === 'string' ? (call.arguments ? JSON.parse(call.arguments) : {}) : (call.arguments || {}); }
+  catch (e) { return JSON.stringify({ error: '工具参数不是合法 JSON：' + String((e && e.message) || e) }); }
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return JSON.stringify({ error: '工具参数必须是对象' });
+  try {
+    const res = await ty.callTool(call.name, args);
+    return compactTyToolResult(call.name, res);
+  } catch (e) {
+    return JSON.stringify({ error: '天源 MCP 调用失败：' + String((e && e.message) || e) });
+  }
+}
+
+// 把工作台现状压成一段文本喂给模型。只读，不写盘，不含任何凭据。
+async function assistantContext(ctx) {
+  const lines = [];
+  const today = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  lines.push('当前日期：' + today.getFullYear() + '-' + pad(today.getMonth() + 1) + '-' + pad(today.getDate()));
+  try {
+    const st = await store.readState();
+    const work = (st && st.data && st.data.work) || {};
+    const projects = Array.isArray(work.projects) ? work.projects : [];
+    const logs = Array.isArray(work.logs) ? work.logs : [];
+    const sumHours = logs.reduce((a, l) => a + (Number(l && l.hours) || 0), 0);
+    lines.push('项目数：' + projects.length + '；工时记录：' + logs.length + ' 条，合计 ' + (Math.round(sumHours * 10) / 10) + ' 小时');
+    if (projects.length) {
+      lines.push('项目清单（编号 | 名称 | 客户 | 阶段 | 截止 | 天源ID）：');
+      for (const p of projects.slice(0, 25)) {
+        const hours = logs.filter(l => l && l.projectId === p.id).reduce((a, l) => a + (Number(l.hours) || 0), 0);
+        lines.push('- ' + [p.code || '-', p.name || '-', p.client || '-', p.stage || '-', p.deadline || '-', p.tyId || '-'].join(' | ')
+          + (hours ? ' | 已投入 ' + (Math.round(hours * 10) / 10) + 'h' : ''));
+      }
+      if (projects.length > 25) lines.push('（仅列出前 25 个，共 ' + projects.length + ' 个）');
+    }
+  } catch (e) {
+    lines.push('项目数据读取失败：' + String((e && e.message) || e));
+  }
+  try {
+    const s = await ty.status();
+    lines.push('天源 MCP：' + (s && s.connected ? '已绑定' : (s && s.expired ? '授权已过期' : '未绑定'))
+      + (s && s.expiresAt ? '，有效期至 ' + String(s.expiresAt).slice(0, 16).replace('T', ' ') : ''));
+  } catch (e) { lines.push('天源 MCP：状态读取失败'); }
+  try {
+    const c = cliAuth.status();
+    lines.push('tycpv CLI：' + (!c || !c.installed ? '未安装' : (c.authenticated ? '本地凭据有效' : '无有效本地凭据'))
+      + (c && c.expiresAt ? '，至 ' + String(c.expiresAt).slice(0, 16).replace('T', ' ') : ''));
+  } catch (e) { lines.push('tycpv CLI：状态读取失败'); }
+  return lines.join('\n');
+}
+
+// 确定性命令：不花模型额度，直接返回结构化事实。用户在对话里打 / 开头即可。
+async function assistantCommand(ctx, text) {
+  const cmd = String(text || '').trim();
+  if (!/^\//.test(cmd)) return null;
+  // 先剥掉行首的 /，再切词；否则「/项目」会整体落进被丢弃的第 0 段，name 恒为 undefined。
+  const [name, ...rest] = cmd.slice(1).split(/\s+/);
+  const arg = rest.join(' ');
+  if (name === '项目' || name === 'projects') {
+    const st = await store.readState();
+    const projects = ((st && st.data && st.data.work && st.data.work.projects) || []);
+    if (!projects.length) return '工作台里还没有项目。到「工作 → 天源项目」添加，或从「天源同步」拉取。';
+    const kw = arg.trim();
+    const hit = kw ? projects.filter(p => [p.code, p.name, p.client].some(v => String(v || '').includes(kw))) : projects;
+    if (!hit.length) return '没有匹配「' + kw + '」的项目。';
+    return hit.slice(0, 30).map(p => '- ' + (p.code || '（无编号）') + ' ' + (p.name || '') +
+      (p.stage ? '（' + p.stage + '）' : '') + (p.tyId ? ' · 天源ID ' + p.tyId : '')).join('\n');
+  }
+  if (name === '状态' || name === 'status') {
+    return await assistantContext(ctx);
+  }
+  if (name === '导出' || name === 'export') {
+    return [
+      '导出我不代劳，需要你在界面上点——因为要选公司和确认输出位置：',
+      '1. 打开「工作 → 天源项目」，找到目标项目；',
+      '2. 在操作列点「导出明细表」或「导出申报表」；',
+      '3. 在弹出的面板里勾选公司、确认输出目录，再点开始。',
+      '明细表默认会恢复公式并设置打印格式；申报表只设置打印格式（不改公式），两者步骤不同。',
+    ].join('\n');
+  }
+  return '可用命令：/项目 [关键词]、/状态、/导出。';
+}
+
+// 把一次对话跑成 SSE 流。前端用 fetch + ReadableStream 读，逐块渲染。
+async function runAssistantChat(ctx, req) {
+  const body = await req.json().catch(() => ({}));
+  const raw = Array.isArray(body && body.messages) ? body.messages : [];
+  const turns = [];
+  for (const m of raw.slice(-ASSISTANT_MAX_TURNS)) {
+    if (!m || typeof m.content !== 'string') continue;
+    const text = m.content.trim();
+    if (!text) continue;
+    if (m.role === 'assistant') {
+      // 历史里的 assistant 消息必须带 source（provider-adapter 会读 source.replayState，
+      // 缺 source 会抛 `Cannot read properties of undefined (reading 'replayState')`，
+      // pi-ai adapter 的 toPiAssistant 是无条件读取）。kind:'model' 且无 replayState 时
+      // 各 adapter 都按「外来助手内容」降级处理，正好是我们要的纯文本历史。
+      turns.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: text.slice(0, ASSISTANT_MAX_CHARS) }],
+        source: { kind: 'model', provider: 'workbench-history', model: 'text' },
+      });
+    } else {
+      turns.push({ role: 'user', content: [{ type: 'text', text: text.slice(0, ASSISTANT_MAX_CHARS) }] });
+    }
+  }
+  if (!turns.length) return json({ error: '缺少对话内容' }, 400);
+
+  const encoder = new TextEncoder();
+  const last = turns[turns.length - 1];
+  const lastText = last.role === 'user' ? (last.content[0] && last.content[0].text) || '' : '';
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let closed = false;
+      const send = obj => {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode('data: ' + JSON.stringify(obj) + '\n\n')); } catch (e) { closed = true; }
+      };
+      const finish = () => {
+        if (closed) return;
+        closed = true;
+        try { controller.enqueue(encoder.encode('data: [DONE]\n\n')); } catch (e) {}
+        try { controller.close(); } catch (e) {}
+      };
+      try {
+        send({ type: 'meta', stage: 'context' });
+
+        // 确定性命令优先：不消耗模型，也不会被模型改写。
+        const cmdOut = await assistantCommand(ctx, lastText);
+        if (cmdOut !== null) {
+          send({ type: 'text', text: cmdOut });
+          send({ type: 'done', mode: 'command' });
+          finish();
+          return;
+        }
+
+        const llm = readLlm(ctx);
+        if (!llm || typeof llm.stream !== 'function') {
+          send({ type: 'error', message: '宿主没有可用的模型服务。' + (await modelDiagnostics(ctx)) });
+          finish();
+          return;
+        }
+        let selection = null;
+        if (body && body.provider && body.model) selection = { provider: String(body.provider), model: String(body.model) };
+        else selection = await resolveModel(ctx);
+        if (!selection || !selection.provider || !selection.model) {
+          send({ type: 'error', message: '没有可用的模型（可用提供方为空）。' + (await modelDiagnostics(ctx)) });
+          finish();
+          return;
+        }
+
+        send({ type: 'meta', stage: 'model', provider: selection.provider, model: selection.model });
+        const contextText = await assistantContext(ctx);
+        const system = ASSISTANT_SYSTEM + '\n\n【工作台上下文】\n' + contextText;
+
+        const abort = new AbortController();
+        const onAbort = () => { try { abort.abort(); } catch (e) {} };
+        try { if (req.signal) req.signal.addEventListener('abort', onAbort); } catch (e) {}
+        const timer = setTimeout(() => { try { abort.abort(); } catch (e) {} }, 180000);
+        if (timer.unref) timer.unref();
+
+        const baseOptions = {
+          provider: selection.provider,
+          model: selection.model,
+          system,
+          temperature: 0.3,
+          maxTokens: 2400,
+          signal: abort.signal,
+          purpose: 'workbench-assistant-chat',
+        };
+        if (selection.reasoningEffort) baseOptions.reasoningEffort = selection.reasoningEffort;
+
+        // 有界工具循环：模型可调用天源只读工具。finish 为 tool-calls 时逐个执行，
+        // 结果以 role:'tool' 紧跟回填（DeepSeek adapter 要求 tool_result 必须紧跟
+        // 对应 tool_use，顺序错会抛 `tool calls need immediate results`）。
+        // 最多 TY_TOOL_MAX_HOPS 轮，防止模型无限递归调用。
+        let text = '';
+        let usage = null;
+        const convo = turns.slice();
+        try {
+          for (let hop = 0; hop <= TY_TOOL_MAX_HOPS; hop += 1) {
+            const options = Object.assign({}, baseOptions, { messages: convo, tools: ASSISTANT_TOOLS });
+            let roundText = '';
+            let finishKind = null;
+            const calls = [];
+            const callIndex = new Map();
+            for await (const chunk of llm.stream(options)) {
+              if (chunk.type === 'text-delta') {
+                roundText += chunk.text;
+                send({ type: 'text', text: chunk.text });
+              } else if (chunk.type === 'tool-call-delta') {
+                const i = chunk.index;
+                let entry = callIndex.get(i);
+                if (!entry) { entry = { id: chunk.id || '', name: chunk.name || '', arguments: '' }; callIndex.set(i, entry); }
+                if (chunk.id) entry.id = chunk.id;
+                if (chunk.name) entry.name = chunk.name;
+                entry.arguments += chunk.argumentsDelta || '';
+              } else if (chunk.type === 'block-end' && chunk.block && chunk.block.type === 'tool-call') {
+                calls.push(chunk.block);
+              } else if (chunk.type === 'usage') {
+                usage = chunk.usage;
+              } else if (chunk.type === 'finish') {
+                const reason = chunk.reason;
+                finishKind = reason && reason.kind;
+                if (finishKind === 'error') {
+                  const m = (reason.failure && reason.failure.message) || '模型返回错误';
+                  send({ type: 'error', message: m });
+                } else if (finishKind === 'aborted') {
+                  send({ type: 'error', message: '本轮被中断（超时或取消）。' });
+                }
+              }
+            }
+            text += roundText;
+            // 某些 adapter 只有 delta 没有 block-end：从累积的 delta 兜底拼出完整 tool-call。
+            if (calls.length === 0 && callIndex.size > 0) {
+              for (const entry of callIndex.values()) calls.push({ type: 'tool-call', id: entry.id || 'call-' + calls.length, name: entry.name, arguments: entry.arguments });
+            }
+            if (finishKind === 'error' || finishKind === 'aborted') break;
+            if (finishKind !== 'tool-calls' || calls.length === 0) break;
+            const content = [];
+            if (roundText) content.push({ type: 'text', text: roundText });
+            for (const c of calls) content.push({ type: 'tool-call', id: c.id, name: c.name, arguments: typeof c.arguments === 'string' ? c.arguments : JSON.stringify(c.arguments || {}) });
+            convo.push({ role: 'assistant', content, source: { kind: 'model', provider: selection.provider, model: selection.model } });
+            for (const call of calls) {
+              const label = ASSISTANT_TOOLS.find(t => t.name === call.name);
+              send({ type: 'tool', name: call.name, label: label ? label.description : '' });
+              const outText = await callTyToolSafe(ctx, call);
+              convo.push({ role: 'tool', toolCallId: call.id, content: [{ type: 'text', text: outText }] });
+            }
+          }
+        } catch (e) {
+          send({ type: 'error', message: '调用模型失败：' + String((e && e.message) || e) });
+        } finally {
+          clearTimeout(timer);
+          try { if (req.signal) req.signal.removeEventListener('abort', onAbort); } catch (e) {}
+        }
+        send({ type: 'done', mode: 'model', provider: selection.provider, model: selection.model, usage: usage || null, chars: text.length });
+        finish();
+      } catch (e) {
+        if (!closed) {
+          try { controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'error', message: String((e && e.message) || e) }) + '\n\n')); } catch (_) {}
+        }
+        try { controller.close(); } catch (_) {}
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+    },
+  });
+}
+
 export function apply(ctx) {
   // 幂等：宿主半侧有两个 entry（主包 + 仅宿主的包装包）都会 apply，
   // 用下面的「路由归属表」保证同一路径只注册一次。
@@ -908,8 +1475,9 @@ export function apply(ctx) {
   // 否则先跑完的主包（旧缓存代码，没有新增的 /lib/* 路由）会把新代码挡在门外，
   // 表现为重启后文件库仍报 404。
   const G = globalThis;
-  // 版本号与 plugins/dsh-workbench-host/index.js 的 ?rev= 保持一致。
-  const REV = 'rev46';
+  // 版本号写进 ~/.dsh/workbench-host-applied.json 的 rev 字段，排障时用来确认
+  // 运行中的进程到底加载了哪一版宿主代码。改了宿主逻辑就往上加一。
+  const REV = 'rev49';
   // 路由归属表：path -> 「注册它的那个 apply() 实例」的 token。
   //
   // 为什么不用「REV 布尔标记挡住第二次 apply」：宿主半侧有两个 entry（主包 + 仅宿主的
@@ -1114,17 +1682,57 @@ export function apply(ctx) {
         },
       },
       {
+        // ego 驱动：在 ego 的 workbench-sync 窗口打开天源首页，供用户在该窗口扫码登录。
+        // 注意：ego 的 task space 之间 cookie 隔离，playwright 那套登录态在这里无效。
+        path: PREFIX + '/ty/ego/login', methods: ['POST'], fetch: async () => {
+          try {
+            if (!resolveEgoBin()) return json({ ok: false, code: 'NO_EGO', msg: '未安装 ego 浏览器' }, 503);
+            const r = await spawnEgoScript(buildLoginScript(), 120000);
+            return json(r || { ok: false, msg: '登录窗口未返回结果' });
+          } catch (e) { return json({ ok: false, msg: String(e.message || e) }, 500); }
+        },
+      },
+      {
         // ego 驱动：列出项目下公司 + 各家可导出的文档类型（reportConfigList 权威来源）
         path: PREFIX + '/ty/ego/companies', methods: ['GET', 'HEAD'], fetch: async (req) => {
           try {
             const u = new URL(req.url, 'http://127.0.0.1');
             const projectId = u.searchParams.get('projectId');
+            const engine = u.searchParams.get('engine') === 'ego' ? 'ego' : 'browser';
             if (!/^\d+$/.test(String(projectId || ''))) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
+            if (engine === 'browser') {
+              if (!rb.resolveOpencliBin()) return json({ ok: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）' }, 503);
+              const companies = await rb.listCompanies(projectId);
+              return json({ ok: true, companies, engine });
+            }
             if (!resolveEgoBin()) return json({ ok: false, code: 'NO_EGO', error: '未安装 ego 浏览器' }, 503);
             const r = await spawnEgoScript(buildCompaniesScript(projectId), 180000);
-            if (r && r.ok) return json({ ok: true, companies: r.companies || [] });
+            if (r && r.ok) return json({ ok: true, companies: r.companies || [], engine });
             return json({ ok: false, code: r && r.code, error: (r && (r.msg || r.code)) || '读取公司列表失败' }, r && r.code === 'NOT_LOGGED_IN' ? 401 : 500);
-          } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
+          } catch (e) {
+            const code = e && e.message === 'NOT_LOGGED_IN' ? 'NOT_LOGGED_IN'
+              : e && e.message === 'BRIDGE_DISCONNECTED' ? 'BRIDGE_DISCONNECTED'
+              : (e && e.message) || '';
+            const status = code === 'NOT_LOGGED_IN' ? 401 : (code === 'BRIDGE_DISCONNECTED' ? 424 : 500);
+            return json({ ok: false, code, error: (e && (e.detail || e.message)) || String(e) }, status);
+          }
+        },
+      },
+      {
+        // 浏览器通道自检 / 自愈：扩展断连时重启 opencli daemon 并等扩展重连
+        path: PREFIX + '/ty/ego/bridge', methods: ['GET', 'POST'], fetch: async (req) => {
+          try {
+            if (!rb.resolveOpencliBin()) return json({ ok: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）' }, 503);
+            if (req.method === 'POST') {
+              const r = await rb.recoverBridgeNow();
+              if (r && r.ok) return json({ ok: true, recovered: true, ms: r.ms || 0 });
+              return json({ ok: false, code: 'BRIDGE_DISCONNECTED', error: r && r.detail ? ('自动重连失败：' + r.detail) : '自动重连失败' }, 424);
+            }
+            const h = await rb.bridgeHealth();
+            return h.ok ? json({ ok: true }) : json({ ok: false, code: 'BRIDGE_DISCONNECTED', error: h.detail || '扩展未连接' }, 424);
+          } catch (e) {
+            return json({ ok: false, error: String(e.message || e) }, 500);
+          }
         },
       },
       {
@@ -1133,16 +1741,30 @@ export function apply(ctx) {
           try {
             const u = new URL(req.url, 'http://127.0.0.1');
             const projectId = u.searchParams.get('projectId');
+            const engine = u.searchParams.get('engine') === 'ego' ? 'ego' : 'browser';
             if (!/^\d+$/.test(String(projectId || ''))) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
-            if (!resolveEgoBin()) return json({ ok: true, logged: false, code: 'NO_EGO', error: '未安装 ego 浏览器' });
+            if (engine === 'browser') {
+              if (!rb.resolveOpencliBin()) return json({ ok: true, logged: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）', engine });
+              try {
+                const reports = await rb.listReports(projectId);
+                return json({ ok: true, logged: true, reports, engine });
+              } catch (e) {
+                const code = e && e.message === 'NOT_LOGGED_IN' ? 'NOT_LOGGED_IN'
+                  : e && e.message === 'BRIDGE_DISCONNECTED' ? 'BRIDGE_DISCONNECTED'
+                  : 'PROBE_FAILED';
+                return json({ ok: true, logged: false, code, error: (e && (e.detail || e.message)) || '未登录', engine });
+              }
+            }
+            if (!resolveEgoBin()) return json({ ok: true, logged: false, code: 'NO_EGO', error: '未安装 ego 浏览器', engine });
             const r = await spawnEgoScript(buildProbeScript(projectId), 150000);
-            if (r && r.ok && r.logged) return json({ ok: true, logged: true, reports: r.reports || [] });
-            return json({ ok: true, logged: false, code: r && r.code, error: (r && (r.msg || r.code)) || '未登录' });
+            if (r && r.ok && r.logged) return json({ ok: true, logged: true, reports: r.reports || [], engine });
+            return json({ ok: true, logged: false, code: r && r.code, error: (r && (r.msg || r.code)) || '未登录', engine });
           } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
         },
       },
       {
-        // ego 驱动：原生批量导出（列表→生成→轮询→下载→落盘）
+        // 引擎选择：ego（独立 task space 浏览器，需单独登录）
+        //          browser（用户真实浏览器，走 opencli Browser Bridge，共享登录态，默认）
         path: PREFIX + '/ty/ego/export', methods: ['POST'], fetch: async (req) => {
           try {
             const b = await req.json().catch(() => ({}));
@@ -1152,6 +1774,8 @@ export function apply(ctx) {
             if (!/^\d+$/.test(projectId)) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
             const items = Array.isArray(b.items) ? b.items : [];
             if (!items.length) return json({ ok: false, error: '请至少选择一份文档' }, 400);
+            const applyFormat = b.applyFormat !== false;   // 默认按「报告格式」页处理表格
+            const engine = b.engine === 'ego' ? 'ego' : 'browser';   // 默认用户真实浏览器
             for (const it of items) {
               if (!it || !/^\d+$/.test(String(it.companyId || '')) || ![1, 2, 3].includes(Number(it.type))) return json({ ok: false, error: 'items 每项需数字 companyId 与 type(1/2/3)' }, 400);
               if (!['current', 'refresh'].includes(it.mode)) return json({ ok: false, error: 'mode 必须为 current 或 refresh' }, 400);
@@ -1170,35 +1794,84 @@ export function apply(ctx) {
               await mkdir(outDir, { recursive: true });
             }
             const setProg = patch => { if (exportProgress.size > 50) { let oldest = null; for (const [k, v] of exportProgress) if (!oldest || v.at < oldest.at) oldest = { k, at: v.at }; if (oldest) exportProgress.delete(oldest.k); } exportProgress.set(jobId, { at: Date.now(), ...patch }); };
-            setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, message: '提升 ego 窗口…' });
+            setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, message: engine === 'ego' ? '提升 ego 窗口…' : '连接你的浏览器…' });
 
             (async () => {
               try {
-                setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, message: '正在驱动 ego 浏览器执行导出…' });
-                const r = await spawnEgoScript(buildReportScript({
-                  projectId,
-                  items: items.map(i => ({ companyId: String(i.companyId), companyName: i.companyName || '', type: Number(i.type), mode: i.mode })),
-                }), Math.max(900000, items.length * 660000));
+                setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, engine, message: engine === 'ego' ? '正在驱动 ego 浏览器执行导出…' : '正在驱动你的浏览器执行导出…' });
+                const normItems = items.map(i => ({ companyId: String(i.companyId), companyName: i.companyName || '', type: Number(i.type), mode: i.mode }));
+                let r;
+                if (engine === 'browser') {
+                  if (!rb.resolveOpencliBin()) {
+                    setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: ['未找到 opencli（你的浏览器通道）。请联系管理员安装 opencli，或改用 ego 引擎。'], outDir, message: '缺少 opencli' });
+                    return;
+                  }
+                  r = await rb.exportReports({
+                    projectId, items: normItems,
+                    onLog: (m) => { const cur = exportProgress.get(jobId); if (cur) setProg({ ...cur, at: Date.now(), logs: [...(cur.logs || []), m].slice(-200) }); },
+                  });
+                } else {
+                  r = await spawnEgoScript(buildReportScript({ projectId, items: normItems }), Math.max(900000, items.length * 660000));
+                }
                 if (!r || !r.ok) {
-                  const notLogged = r && r.code === 'NOT_LOGGED_IN';
-                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: [notLogged ? 'ego 窗口未登录天源：请在该窗口登录一次后重试' : String((r && (r.msg || r.code)) || 'ego 执行失败')], outDir, message: notLogged ? '需要登录天源' : '导出失败', logs: (r && r.logs) || [] });
+                  const notLogged = r && (r.code === 'NOT_LOGGED_IN' || r.code === 'BRIDGE_DISCONNECTED');
+                  const engineName = engine === 'ego' ? 'ego 窗口' : '你的浏览器';
+                  const bridgeDown = r && r.code === 'BRIDGE_DISCONNECTED';
+                  const msg = bridgeDown
+                    ? String((r && r.detail) || (r && r.msg) || '连不上浏览器')
+                    : notLogged ? (engineName + '未登录天源：请在该窗口登录一次后重试')
+                    : String((r && (r.msg || r.code || r.detail)) || '导出失败');
+                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: [msg], outDir, engine, message: bridgeDown ? '连不上浏览器' : (notLogged ? '需要登录天源' : '导出失败'), logs: (r && r.logs) || [] });
                   return;
                 }
                 const files = []; const errors = Array.isArray(r.errors) ? r.errors.slice() : [];
+                const fmtErrors = [];
                 for (const f of (r.files || [])) {
                   try {
                     const buf = Buffer.from(String(f.base64 || ''), 'base64');
                     if (buf.length < 4 || buf.slice(0, 2).toString('hex') !== '504b') { errors.push((f.fileName || '未知文件') + '：ZIP 校验失败'); continue; }
                     const p = join(outDir, f.fileName || ('report-' + Date.now() + '.docx'));
                     await writeFile(p, buf);
-                    files.push({ file: p, company: f.companyName, companyId: f.companyId, type: f.type, version: f.version, bytes: buf.length });
+                    const rec = { file: p, company: f.companyName, companyId: f.companyId, type: f.type, version: f.version, bytes: buf.length, formatted: false };
+                    if (applyFormat) {
+                      try {
+                        const fm = await applyDocxTableFormat(p);
+                        rec.formatted = true;
+                        rec.tables = fm.tables;
+                        rec.cells = fm.cells;
+                        rec.formatMode = fm.mode || 'toolbox';
+                        rec.skippedAttachment = fm.skippedAttachment || 0;
+                        rec.skippedFormatted = fm.skippedFormatted || 0;
+                      } catch (e) {
+                        // 格式处理失败不丢文件：保留原件，错误单列
+                        fmtErrors.push((f.fileName || '未知文件') + '：表格格式未处理（' + String(e.message || e) + '）');
+                      }
+                    }
+                    files.push(rec);
                   } catch (e) { errors.push((f.fileName || '未知文件') + '：写入失败 ' + String(e.message || e)); }
                 }
+                if (fmtErrors.length) errors.push(...fmtErrors);
                 const okAll = errors.length === 0 && files.length > 0;
+                const fmtOk = files.filter(f => f.formatted).length;
+                const fmtTables = files.reduce((n, f) => n + (f.tables || 0), 0);
+                const fmtSkipAtt = files.reduce((n, f) => n + (f.skippedAttachment || 0), 0);
+                const fmtSkipDone = files.reduce((n, f) => n + (f.skippedFormatted || 0), 0);
+                let suffix = '';
+                if (applyFormat && fmtOk) {
+                  if (fmtTables) {
+                    suffix = '，已按「报告格式」页的表格参数处理 ' + fmtOk + ' 份的表格（共 ' + fmtTables + ' 张表）';
+                  } else {
+                    suffix = '，' + fmtOk + ' 份的表格本来就已经符合「报告格式」页的参数，未做改动';
+                  }
+                  const skips = [];
+                  if (fmtSkipDone) skips.push(fmtSkipDone + ' 张已排好的表');
+                  if (fmtSkipAtt) skips.push(fmtSkipAtt + ' 张附件里的表');
+                  if (skips.length) suffix += '；跳过了' + skips.join('、');
+                }
                 setProg({
                   status: okAll ? 'done' : (files.length ? 'partial' : 'failed'), stage: okAll ? 'done' : (files.length ? 'partial' : 'failed'),
-                  total: items.length, done: items.length, files, errors, outDir,
-                  message: okAll ? ('完成：' + files.length + ' 份原生文档') : (files.length ? ('部分完成：' + files.length + ' 份成功，' + errors.length + ' 项失败') : '导出失败'),
+                  total: items.length, done: items.length, files, errors, outDir, applyFormat, engine,
+                  message: okAll ? ('完成：' + files.length + ' 份原生文档' + suffix) : (files.length ? ('部分完成：' + files.length + ' 份成功，' + errors.length + ' 项失败') : '导出失败'),
                   logs: r.logs || [],
                 });
               } catch (e) {
@@ -1531,142 +2204,13 @@ export function apply(ctx) {
       {
         // 天源导出（v1 同步等待）：调本机 tycpv 导出资产基础法明细表/申报表，再逐个工作簿
         // 「恢复公式（asset-link-restore）→ 设置打印格式（appraisal-*-print-format）→ 校验 zip → 原子替换」。
-        // 与浏览器插件 Native Helper 的 run_detail_table_workflow / run_declaration_table_workflow 同一套脚本与流程。
-        // body: { kind: 'detail'|'declare', projectId: '<数字>', projectCode?, projectName?, companyIds?, restoreFormulas?, applyFormat? }
+        // 实现在文件顶部的 runTyExport：助手的工作台工具走同一份，避免两处逻辑漂移。
+        // body: { kind: 'detail'|'declare', projectId: '<数字>', projectCode?, projectName?, companyIds?, restoreFormulas?, applyFormat?, outputDir?, jobId? }
         path: PREFIX + '/ty/export', methods: ['POST'], fetch: async (req) => {
-        const KINDS = {
-          detail: { sub: 'export-asset-detail-table', fmt: 'appraisal-detail-print-format/scripts/adjust_appraisal_detail_print.py', label: '明细表' },
-          declare: { sub: 'export-asset-declare-table', fmt: 'appraisal-declaration-print-format/scripts/adjust_appraisal_declaration_print.py', label: '申报表' },
-        };
-        const skillsDir = [
-          process.env.TIANYUAN_PRINT_SKILLS_DIR,
-          join(homedir(), '.tianyuan-workbench', 'dependencies', '天源评估系统', 'print-format-skills'),
-          join(homedir(), 'Projects', 'tianyuan-workbench-release-20261001', 'skills'),
-        ].filter(Boolean).find(c => existsSync(join(c, 'asset-link-restore', 'scripts', 'restore_links.py')));
-        const walkXlsx = async (dir, out) => {
-          let entries = [];
-          try { entries = await readdir(dir, { withFileTypes: true }); } catch (e) { return; }
-          for (const ent of entries) {
-            const p = join(dir, ent.name);
-            if (ent.isDirectory()) await walkXlsx(p, out);
-            else if (/\.xlsx$/i.test(ent.name)) out.add(p);
-          }
-        };
-        let outDir = null;
-        try {
-          const b = await req.json().catch(() => ({}));
-          const jobId = /^[A-Za-z0-9_-]{6,64}$/.test(String(b.jobId || '')) ? String(b.jobId) : '';
-          const setProg = patch => { if (!jobId) return; if (exportProgress.size > 50) { let oldest = null; for (const [k, v] of exportProgress) if (!oldest || v.at < oldest.at) oldest = { k, at: v.at }; if (oldest) exportProgress.delete(oldest.k); } exportProgress.set(jobId, { at: Date.now(), ...patch }); };
-          const clearProg = () => { if (jobId) exportProgress.delete(jobId); };
-          const cfg = KINDS[String(b.kind || '')];
-          if (!cfg) return json({ ok: false, error: 'kind 必须是 detail（明细表）或 declare（申报表）' }, 400);
-          const projectId = String(b.projectId || '').trim();
-          if (!/^\d+$/.test(projectId)) return json({ ok: false, error: 'projectId 必须为天源数字项目 ID' }, 400);
-          const companyIds = String(b.companyIds || '').trim();
-          if (companyIds && !/^\d+(,\d+)*$/.test(companyIds)) return json({ ok: false, error: 'companyIds 必须为数字逗号列表' }, 400);
-          // 浏览器插件的申报表流程只做申报表格式整理；公式恢复用于明细表。
-          const restoreFormulas = b.kind === 'detail' && b.restoreFormulas !== false;
-          const applyFormat = b.applyFormat !== false;
-          if (!restoreFormulas && !applyFormat) return json({ ok: false, error: '恢复公式与设置格式至少启用一项' }, 400);
-          if (!skillsDir) return json({ ok: false, error: '未找到整理脚本目录（asset-link-restore/restore_links.py）；可设 TIANYUAN_PRINT_SKILLS_DIR 指向 print-format-skills' }, 500);
-          const linkScript = join(skillsDir, 'asset-link-restore', 'scripts', 'restore_links.py');
-          const fmtScript = join(skillsDir, cfg.fmt);
-          if (applyFormat && !existsSync(fmtScript)) return json({ ok: false, error: '未找到格式脚本：' + fmtScript }, 500);
-
-          const tycpv = [process.env.TYCPV_BIN, '/usr/local/bin/tycpv', '/opt/homebrew/bin/tycpv'].find(x => x && existsSync(x)) || 'tycpv';
-          const pyBin = existsSync(WORKBENCH_VENV_PY) ? WORKBENCH_VENV_PY : 'python3';
-          const verifyZip = (p) => runCli(pyBin, ['-c', 'import sys,zipfile; sys.exit(0 if zipfile.ZipFile(sys.argv[1]).testzip() is None else 2)', p], 120000);
-          const tail = (s, n) => String(s || '').trim().split(/\r?\n/).filter(Boolean).slice(-n).join(' ｜ ');
-
-          const st0 = await store.config();
-          const folder = safeFolderName((String(b.projectCode || '') + ' ' + String(b.projectName || '')).trim()) || projectId;
-          let outputRoot = join(st0.dir, '导出');
-          if (b.outputDir != null && b.outputDir !== '') {
-            if (typeof b.outputDir !== 'string' || !isAbsolute(b.outputDir)) return json({ ok: false, error: '输出目录必须是已存在的绝对路径' }, 400);
-            try {
-              outputRoot = await realpath(b.outputDir);
-              if (!(await stat(outputRoot)).isDirectory()) throw new Error('not a directory');
-            } catch (_) { return json({ ok: false, error: '输出目录不存在或不是文件夹' }, 400); }
-          }
-          // 先建立父目录，再独占建立批次，避免误用已存在的批次。
-          const batchId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + Math.random().toString(36).slice(2, 10);
-          const batchParent = join(outputRoot, folder, cfg.label);
-          await mkdir(batchParent, { recursive: true });
-          outDir = join(batchParent, batchId);
-          await mkdir(outDir);
-          rememberExportBatch(await realpath(outDir));
-          setProg({ stage: 'export', msg: '正在调用 tycpv 导出（可能需要几分钟）…' });
-
-          const args = [cfg.sub, '-p', projectId, '-o', outDir];
-          if (companyIds) args.push('-c', companyIds);
-          const cli = await runCli(tycpv, args, 15 * 60 * 1000);
-          if (cli.code !== 0) {
-            clearProg();
-            const why = tail(cli.stderr, 3) || tail(cli.stdout, 3);
-            if (/缺少 MCP token|本地登录.*过期/i.test(why)) return json({ ok: false, outDir, error: 'CLI 没有可用凭据。请到「工作 → 连接设置」点击「授权 CLI」并完成浏览器登录；MCP 和 CLI 授权相互独立。' }, 401);
-            return json({ ok: false, outDir, error: 'tycpv 导出失败（退出码 ' + cli.code + '）。请检查 CLI 授权和项目权限。' }, 502);
-          }
-          const after = new Set(); await walkXlsx(outDir, after);
-          const exported = [...after];
-          if (!exported.length) { clearProg(); return json({ ok: false, outDir, error: 'tycpv 已退出但目录里没有新 xlsx：' + outDir }, 500); }
-          setProg({ stage: 'process', done: 0, total: exported.length, file: '', msg: '开始逐个工作簿整理…' });
-
-          const results = [];
-          for (const [fi, src] of exported.entries()) {
-            const base = src.slice(src.lastIndexOf('/') + 1);
-            const dot = base.lastIndexOf('.');
-            const stem = dot > 0 ? base.slice(0, dot) : base;
-            const ext = dot > 0 ? base.slice(dot) : '';
-            const dir = dirname(src);
-            const stageStem = '.' + stem + '.tianyuan-workflow-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-            const stage = join(dir, stageStem + ext);
-            const reportTemp = join(dir, stageStem + '_链接恢复对比报告.xlsx');
-            const stages = [];
-            let reportPath = null, reportLinked = false;
-            setProg({ stage: 'process', done: fi, total: exported.length, file: stem, msg: '正在整理：' + stem });
-            try {
-              await copyFile(src, stage);
-              if (restoreFormulas) {
-                const r = await runCli(pyBin, [linkScript, stage], 5 * 60 * 1000);
-                if (r.code !== 0) throw new Error('恢复公式失败：' + (tail(r.stderr, 3) || tail(r.stdout, 3) || ('退出码 ' + r.code)));
-                const gen = join(dir, stageStem + '_链接恢复' + ext);
-                if (!existsSync(gen)) throw new Error('恢复公式没有产出：' + gen);
-                await rename(gen, stage);
-                stages.push('restore_formulas');
-                if (existsSync(reportTemp)) reportPath = join(dir, stem + '_链接恢复对比报告.xlsx');
-              }
-              if (applyFormat) {
-                const r = await runCli(pyBin, [fmtScript, stage, '--no-backup'], 5 * 60 * 1000);
-                if (r.code !== 0) throw new Error('设置格式失败：' + (tail(r.stderr, 3) || tail(r.stdout, 3) || ('退出码 ' + r.code)));
-                stages.push('apply_format');
-              }
-              const v = await verifyZip(stage);
-              if (v.code !== 0) throw new Error('文件校验失败（zip 结构异常）');
-              // 报告先以不覆盖方式发布；若工作簿提交失败，撤销本次报告发布。
-              if (reportPath) { await link(reportTemp, reportPath); reportLinked = true; }
-              await rename(stage, src);
-              if (reportLinked) { try { await rm(reportTemp); } catch (_) {} }
-              results.push({ ok: true, sourcePath: src, outputPath: src, reportPath, stages });
-            } catch (fe) {
-              if (reportLinked) { try { await rm(reportPath); } catch (_) {} }
-              try { if (existsSync(stage)) await rm(stage); } catch (e) {}
-              try { if (existsSync(reportTemp)) await rm(reportTemp); } catch (e) {}
-              results.push({ ok: false, sourcePath: src, reason: String((fe && fe.message) || fe) });
-            }
-          }
-          const successCount = results.filter(r => r.ok).length;
-          clearProg();
-          return json({
-            ok: successCount > 0,
-            kind: String(b.kind || ''), label: cfg.label, projectId,
-            outDir, total: results.length, successCount, failedCount: results.length - successCount,
-            results,
-          });
-        } catch (e) {
-          return json({ ok: false, ...(outDir ? { outDir } : {}), error: String((e && e.message) || e) }, 500);
-        }
+          const r = await runTyExport(await req.json().catch(() => ({})));
+          return json(r.body, r.status);
+        },
       },
-    },
     {
       // 前端轮询导出进度；无任务时返回 unknown。
       path: PREFIX + '/ty/export/progress', methods: ['GET'], fetch: async (req) => {
@@ -2374,6 +2918,10 @@ export function apply(ctx) {
       },
     },
     {
+      // 工作台「助手」浮动对话窗的后端：SSE 流式回答，只读上下文 + 白名单命令
+      path: PREFIX + '/assistant/chat', methods: ['POST'], fetch: async (req) => runAssistantChat(ctx, req),
+    },
+    {
       path: PREFIX + '/data/calendar', methods: ['GET', 'HEAD'], fetch: async () => {
         try {
           const raw = await readFile(new URL('./data/exam-calendar.json', import.meta.url), 'utf8');
@@ -2442,6 +2990,117 @@ export function apply(ctx) {
       for (const p of mine) if (owners.get(p) === token) owners.delete(p);
     };
   }, 'workbench: API routes');
+
+  // ---------- 面向助手的工作台工具 ----------
+  // 工作台页面的「助手」模块复用 better-sidebar 的侧边对话；对话里的模型要能读工作台、
+  // 触发导出，就得有对应的工具。用可选方式取 tools（ctx.get），拿不到就静默跳过 ——
+  // 这个插件历史上曾因 inject 里写了不存在的服务而整条 entry 一直 pending。
+  ctx.effect(() => {
+    let tools = null;
+    try { tools = typeof ctx.get === 'function' ? ctx.get('tools') : null; } catch (_) { tools = null; }
+    if (!tools || typeof tools.register !== 'function') return () => {};
+    const text = (obj) => [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }];
+    const outSchema = { type: 'object' };
+    const disposers = [];
+
+    // 读工作台里的项目与工时；只读，不写数据。
+    disposers.push(tools.register({
+      name: 'workbench_projects',
+      isConcurrencySafe: () => true,
+      description: '列出个人工作台里的项目与工时记录。只读，不会修改任何数据。需要项目的天源数字 ID 时用这个（字段 tyId）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: { type: 'string', description: '可选：按项目编号、名称或客户名过滤，不区分大小写。' },
+          limit: { type: 'integer', minimum: 1, maximum: 200, description: '可选：最多返回多少个项目，默认 50。' },
+        },
+        additionalProperties: false,
+      },
+      output: { schema: outSchema, render: (_a, v) => text(v) },
+      async execute(args) {
+        const a = args && typeof args === 'object' ? args : {};
+        const st = await store.readState();
+        const data = (st && st.data) || {};
+        const work = data.work || {};
+        const projects = Array.isArray(work.projects) ? work.projects : [];
+        const logs = Array.isArray(work.logs) ? work.logs : [];
+        const kw = String(a.keyword || '').trim().toLowerCase();
+        const limit = Number.isFinite(a.limit) ? Math.min(200, Math.max(1, a.limit)) : 50;
+        const hit = kw
+          ? projects.filter(p => [p.code, p.name, p.client].some(x => String(x || '').toLowerCase().includes(kw)))
+          : projects;
+        const hoursOf = id => logs.filter(l => l.projectId === id).reduce((n, l) => n + (Number(l.hours) || 0), 0);
+        return {
+          total: hit.length,
+          returned: Math.min(hit.length, limit),
+          projects: hit.slice(0, limit).map(p => ({
+            id: p.id || null,
+            code: p.code || null,
+            name: p.name || null,
+            client: p.client || null,
+            stage: p.stage || null,
+            deadline: p.deadline || null,
+            baseDate: p.baseDate || null,
+            budgetHours: Number(p.budgetHours) || 0,
+            loggedHours: hoursOf(p.id),
+            tyId: p.tyId || null,
+          })),
+          note: 'tyId 是天源系统的数字项目 ID，调用 workbench_export 时作为 projectId。',
+        };
+      },
+    }));
+
+    // 天源绑定状态：只报状态，绝不返回 token、Cookie 或授权链接。
+    disposers.push(tools.register({
+      name: 'workbench_status',
+      isConcurrencySafe: () => true,
+      description: '查看个人工作台与天源系统的绑定状态：MCP 是否连通（只报连通性与工具数）、CLI 本地凭据是否存在及到期时间。不会返回任何凭据内容。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: { schema: outSchema, render: (_a, v) => text(v) },
+      async execute() {
+        let mcp = { connected: false, state: 'unknown' };
+        try { mcp = await ty.status(); } catch (_) {}
+        let cli = { installed: false, authenticated: false, state: 'unknown' };
+        try { cli = cliAuth.status(); } catch (_) {}
+        return {
+          mcp: { configured: !!mcp.connected, expired: !!mcp.expired, expiresAt: mcp.expiresAt || null, pending: !!mcp.pending },
+          cli: { installed: !!cli.installed, authenticated: !!cli.authenticated, expiresAt: cli.expiresAt || null, state: cli.state || null, reason: cli.reason || '' },
+          note: 'MCP 与 CLI 是两套独立凭据；本地凭据存在不等于远端授权仍然有效。二者都失效时，先在「工作 → 连接设置」重新授权。',
+        };
+      },
+    }));
+
+    // 触发天源导出：与页面按钮共用 runTyExport，避免两处逻辑漂移。
+    disposers.push(tools.register({
+      name: 'workbench_export',
+      isConcurrencySafe: () => false,
+      description: '从天源系统导出资产基础法明细表（detail）或申报表（declare），并逐个工作簿恢复公式、设置打印格式、校验后替换。会在本地新增导出批次目录，运行时间通常几十秒到几分钟。只对 tyId 已知的项目调用；不确定公司范围时不要传 companyIds，那会导出该项目下的全部公司。',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['detail', 'declare'], description: 'detail 导出明细表（默认恢复公式并设置格式）；declare 导出申报表（只设置申报表格式，不恢复公式）。' },
+          projectId: { type: 'string', pattern: '^[0-9]+$', description: '天源数字项目 ID，等于 workbench_projects 返回的 tyId。' },
+          projectCode: { type: 'string', description: '可选：项目编号，仅用于拼输出目录名，例如「20261110001」。' },
+          projectName: { type: 'string', description: '可选：项目简称，仅用于拼输出目录名。' },
+          companyIds: { type: 'string', pattern: '^[0-9]+(,[0-9]+)*$', description: '可选：逗号分隔的公司数字 ID，只导出这些公司。留空则导出该项目下的全部公司。' },
+          restoreFormulas: { type: 'boolean', description: '仅明细表有效，默认 true。设为 false 就跳过公式恢复。' },
+          applyFormat: { type: 'boolean', description: '默认 true。设为 false 就跳过打印格式设置。明细表两项都关会被拒绝。' },
+          outputDir: { type: 'string', description: '可选：已存在的绝对路径目录，导出批次会建在它下面。留空用工作台默认导出目录。' },
+        },
+        required: ['kind', 'projectId'],
+        additionalProperties: false,
+      },
+      output: { schema: outSchema, render: (_a, v) => text(v) },
+      async execute(args) {
+        const r = await runTyExport(args && typeof args === 'object' ? args : {});
+        const b = r.body || {};
+        if (!b.ok && b.error) return { ok: false, error: b.error, outDir: b.outDir || null, results: b.results || [] };
+        return b;
+      },
+    }));
+
+    return () => { for (const d of disposers) { try { d(); } catch (_) {} } };
+  }, 'workbench: agent tools');
 }
 export { name, inject };
 

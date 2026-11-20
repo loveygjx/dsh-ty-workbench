@@ -92,10 +92,27 @@ async function egoMain(DATA, cdp, setup, TPL) {
     return await evaluate('location.href').catch(() => null);
   }
 
+  // 关键：导航后必须确认没被踢回登录页。被踢回时页面在 auth.zhrdc.net，
+  // 后续对 excel.zhrdc.net 的 fetch 会变成跨域，浏览器直接抛 "Failed to fetch"，
+  // 真实原因（未登录）会被这个假象掩盖。
+  async function assertNotRedirectedToLogin() {
+    const href = await evaluate('location.href').catch(() => '');
+    if (href && href.indexOf('auth.zhrdc.net') >= 0) {
+      const err = new Error('NOT_LOGGED_IN');
+      err.tyMsg = '被重定向到登录页，会话已过期';
+      throw err;
+    }
+  }
+
   try {
     if (typeof setup === 'function') await setup();
     const pid = String(DATA.projectId);
     await goto('https://excel.zhrdc.net/ty/operation/' + pid + '/report');
+    try { await assertNotRedirectedToLogin(); } catch (e) {
+      out.ok = false; out.code = 'NOT_LOGGED_IN';
+      out.msg = '这个 ego 窗口的天源登录态已失效（' + ((e && e.tyMsg) || '需要重新登录') + '）。请在该窗口重新登录一次后重试。';
+      emit(); return;
+    }
 
     // 列表读取（同时充当登录态探测）
     async function listReports() {
@@ -233,6 +250,14 @@ async function egoCompanies(DATA, cdp, setup, TPL) {
       const st = await evaluate('document.readyState').catch(() => null);
       if (st === 'complete') break;
     }
+    // 被踢回登录页时页面在 auth.zhrdc.net，跨域 fetch 会抛 "Failed to fetch"，
+    // 必须先把真实原因（会话过期）识别出来，否则报错信息会误导排查方向。
+    const href = await evaluate('location.href').catch(() => '');
+    if (href && href.indexOf('auth.zhrdc.net') >= 0) {
+      out.ok = false; out.code = 'NOT_LOGGED_IN';
+      out.msg = '这个 ego 窗口的天源登录态已失效（被重定向到登录页）。请在该窗口重新登录一次后重试。';
+      emit(); return;
+    }
     const expr = TPL.expr.replace(/PID/g, JSON.stringify(String(DATA.projectId)));
     const j = JSON.parse(await evaluate(expr) || '{}');
     if (j.code !== 200) { out.ok = false; out.msg = (j.msg || ('code ' + j.code)); if (/未登录|login/i.test(out.msg) || j.code === 403) out.code = 'NOT_LOGGED_IN'; emit(); return; }
@@ -276,6 +301,14 @@ async function egoProbe(DATA, cdp, setup, TPL) {
       const st = await evaluate('document.readyState').catch(() => null);
       if (st === 'complete') break;
     }
+    // 会话过期时会跳到 auth.zhrdc.net，此后对 excel 域的 fetch 会变成跨域失败，
+    // 报错信息会从"未登录"歪曲成"Failed to fetch"，所以先判 URL。
+    const href = await evaluate('location.href').catch(() => '');
+    if (href && href.indexOf('auth.zhrdc.net') >= 0) {
+      out.ok = true; out.logged = false; out.code = 'NOT_LOGGED_IN';
+      out.msg = '这个 ego 窗口的天源登录态已失效（被重定向到登录页）。请在该窗口重新登录一次。';
+      emit(); return;
+    }
     const expr = TPL.listExpr.replace('PID', JSON.stringify(String(DATA.projectId)));
     const j = JSON.parse(await evaluate(expr) || '{}');
     if (j.code !== 200) { out.ok = true; out.logged = false; out.msg = j.msg || ('code ' + j.code); emit(); return; }
@@ -287,6 +320,56 @@ async function egoProbe(DATA, cdp, setup, TPL) {
       jobState: Number(x.jobState), attachId: x.attachId ? String(x.attachId) : null,
       downloadable: !!(x.attachId && Number(x.jobState) === 2),
     }));
+    emit();
+  } catch (e) {
+    out.ok = false; out.msg = String((e && e.message) || e); emit();
+  }
+}
+
+/**
+ * 打开 ego 的同步窗口并导航到天源首页，供用户在**该窗口**里扫码登录。
+ *
+ * 为什么不能复用 playwright 的登录：ego 的 task space 之间 cookie 是隔离的，
+ * playwright 那套 profile 登录完，ego 窗口里依然是未登录。
+ */
+export function buildLoginScript() {
+  // 登录场景不抢所有权：窗口若是 user 所有（用户自己点过）就直接用，
+  // 强行 claim 会失败，反而打不开窗口。
+  return '(' + egoLogin.toString() + ')(' + JSON.stringify({ space: SPACE_NAME }) + ', cdp, async function () {'
+    + ' const list = await ego.helpers.listTaskSpaces();'
+    + ' const t = (list || []).find(function (s) { return s && s.name === ' + JSON.stringify(SPACE_NAME) + '; });'
+    + ' if (!t) return ego.helpers.useOrCreateTaskSpace(' + JSON.stringify(SPACE_NAME) + ');'
+    + ' if (t.ownership === "user") return null;'
+    + ' return ego.helpers.claimTaskSpace(t.id);'
+    + '}, null);';
+}
+
+async function egoLogin(DATA, cdp, setup) {
+  const out = { ok: false, logged: false, url: '', msg: '' };
+  const emit = () => console.log('@@DSH_REPORT@@' + JSON.stringify(out));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function evaluate(expr) {
+    const r = await cdp('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+    if (r && r.exceptionDetails) throw new Error('evaluate: ' + JSON.stringify(r.exceptionDetails).slice(0, 200));
+    return r && r.result ? r.result.value : null;
+  }
+  try {
+    if (typeof setup === 'function') await setup();
+    // 慢一点：给浏览器窗口弹出的时间，用户能看见
+    await sleep(300);
+    await cdp('Page.navigate', { url: 'https://ty.zhrdc.net/project/my' });
+    for (let i = 0; i < 40; i++) {
+      await sleep(500);
+      const st = await evaluate('document.readyState').catch(() => null);
+      if (st === 'complete') break;
+    }
+    out.url = (await evaluate('location.href').catch(() => '')) || '';
+    // /project/my 在登录页上；跳到 auth.zhrdc.net 说明还没登录
+    out.logged = out.url.indexOf('/project/my') >= 0 && out.url.indexOf('auth.zhrdc.net') < 0;
+    out.ok = true;
+    out.msg = out.logged
+      ? '该窗口已是登录状态'
+      : '已打开天源登录窗口，请在这个窗口里扫码登录；登录完成后在导出面板点「重新检测」。';
     emit();
   } catch (e) {
     out.ok = false; out.msg = String((e && e.message) || e); emit();
