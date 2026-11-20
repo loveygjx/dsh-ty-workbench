@@ -1267,3 +1267,23 @@ ego 的规则是：task space 被用户操作过就归用户，agent 不能自�
 **注意**：接管后引擎会重新走「新建项目 → 填表」，你窗口里那份没保存的表单会被放弃（本地数据会重新填一遍）。
 
 **生效**：`index.js`/`tysync.js` 要重启 DSH；`client.js` 刷新页面即可。
+
+## 工作台助手：浮动对话窗（rev49，2026-11-20）
+
+工作台顶部第四个模块「助手」+ 全页签可用的浮动对话窗。之前尝试复用 better-sidebar 的侧边对话，但工作台是 `main` 插槽里的主面板条目，激活时右侧栏没有 session seat，侧栏对话打不开；改成页面内自绘浮层，不依赖 sidebarRight。
+
+### 功能
+
+- **浮动对话窗**：右下角浮层，按住标题栏拖到任意位置（双击标题栏回到右下角），位置、放大/还原状态记住；「放大」切换 860px 宽屏。
+- **模型选择**：下拉列出宿主全部 provider/model，选择存 localStorage；选「默认模型」时由后端 `resolveModel` 决定。
+- **对话记录持久化**：写入 `localStorage`（最多 60 条、单条 4000 字符），关窗/切页签/刷新都不丢，恢复的记录还能延续多轮上下文；标题栏「清空」按钮（需确认）。
+- **天源只读工具循环**：模型可调用 4 个白名单只读 MCP 工具（`get_my_projects` / `get_project_companies` / `get_project_summary` / `get_company_asset_based_approach_summary`）直接查天源数据；写操作类工具一律拒绝。最多 4 跳，单个工具结果压缩截断到 12000 字符。
+- **确定性命令**（不消耗模型额度）：`/项目 [关键词]`、`/状态`、`/导出`。
+- **多轮历史修复**：历史 assistant 消息带 `source: {kind:'model'}`，修复 pi-ai 适配器（如 zai-coding-cn）读 `source.replayState` 时 `Cannot read properties of undefined` 崩溃。
+
+### 实现
+
+- 后端 `index.js`：`runAssistantChat` SSE 流式（`text/event-stream`）+ 有界工具循环（`tool-call-delta` 累积 + `block-end` 兜底，`tool_result` 紧跟 `tool_use` 回填）；`ASSISTANT_TOOLS` 白名单；`compactTyToolResult` 对大结果瘦身。
+- 前端 `client.js`：`AssistantDock` 浮层（拖动/放大/模型选择/持久化）、`AssistantPanel` 状态卡与说明。
+
+**生效**：`index.js` 要重启 DSH（REV 标记）；`client.js` 刷新页面。

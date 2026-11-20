@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-workbench',
+  id: '@zer0-lyz/dsh-workbench',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
@@ -4011,9 +4011,11 @@ window.__ModuleLoader__.load({
         setReportDialog({
           token, project: p, status: 'confirm',
           method: 'web',              // web=网页端原生（默认，内容最全）| json=本地重建
+          engine: 'browser',          // browser=你的真实浏览器（共享登录态，默认）| ego=独立 ego 窗口
           companies: [], selected: [], loadingCompanies: true,
           types: [1, 2], mode: 'current',   // current=导出当前版本 | refresh=生成新版本
           webProbe: null, webReports: null,
+          applyFormat: true,          // 原生导出时按报告格式页处理表格
           outputDir: '', jobId: null, message: '',
         });
         setReportDialog(prev => prev && ({ ...prev, selTypes: {} }));
@@ -4021,9 +4023,16 @@ window.__ModuleLoader__.load({
         (async () => {
           const projectId = numericId(p.id);
           if (!projectId) { setReportDialog(d => d && d.token === token ? { ...d, loadingCompanies: false, companyError: '项目 ID 不是有效数字' } : d); return; }
+          // 先自检浏览器通道；扩展被回收时自动重连一次（实测 1~2 秒），避免面板干等
+          try {
+            const bh = await fetch(PREFIX + '/ty/ego/bridge', { cache: 'no-store' }).then(r => r.json()).catch(() => null);
+            if (bh && bh.ok === false && bh.code === 'BRIDGE_DISCONNECTED') {
+              await fetch(PREFIX + '/ty/ego/bridge', { method: 'POST' }).then(r => r.json()).catch(() => null);
+            }
+          } catch (_) { /* 自检失败不阻断主流程，后面读取会给出真实原因 */ }
           const [co, web] = await Promise.all([
-            fetch(PREFIX + '/ty/ego/companies?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
-            fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+            fetch(PREFIX + '/ty/ego/companies?projectId=' + encodeURIComponent(projectId) + '&engine=browser', { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+            fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=browser', { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
           ]);
           const list = (co && co.ok && Array.isArray(co.companies)) ? co.companies : [];
           const selTypes = {};
@@ -4035,6 +4044,8 @@ window.__ModuleLoader__.load({
             selTypes,
             loadingCompanies: false,
             companyError: (co && !co.ok) ? (co.error || '读取公司列表失败') : '',
+            companyExpired: !!(co && !co.ok && co.code === 'NOT_LOGGED_IN'),
+            companyBridgeDown: !!(co && !co.ok && co.code === 'BRIDGE_DISCONNECTED'),
             webProbe: web,
           } : d);
           if (web && web.ok && web.logged && Array.isArray(web.reports)) {
@@ -4079,7 +4090,7 @@ window.__ModuleLoader__.load({
         if (d0.method === 'web') {
           try {
             const r = await fetch(PREFIX + '/ty/ego/export', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ jobId, projectId, items: items.map(i => ({ companyId: i.companyId, companyName: i.companyName, type: i.type, mode: i.mode })), outputDir: d0.outputDir || undefined, projectCode: d0.project.projectCode || '', projectName: d0.project.projectName || '' }) });
+              body: JSON.stringify({ jobId, projectId, engine: d0.engine === 'ego' ? 'ego' : 'browser', applyFormat: d0.applyFormat !== false, items: items.map(i => ({ companyId: i.companyId, companyName: i.companyName, type: i.type, mode: i.mode })), outputDir: d0.outputDir || undefined, projectCode: d0.project.projectCode || '', projectName: d0.project.projectName || '' }) });
             const j = await r.json().catch(() => null);
             if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || ('HTTP ' + r.status));
             const poll = async () => {
@@ -4148,33 +4159,71 @@ window.__ModuleLoader__.load({
                 k === 'web' && d.webProbe && !webOk ? h('span', { className: 'wb-hint', style: { color: 'var(--dsw-alias-state-error-primary,#c0392b)' } }, '　不可用：' + (d.webProbe.error || (d.webProbe.logged === false ? '天源未登录' : '未知'))) : null,
                 h('div', { className: 'wb-hint', style: { marginLeft: 22 } }, desc)))) ,
 
-          isWeb && webOk ? h('div', { className: 'wb-hint', style: { marginTop: 6 } }, '已登录天源网页，账号：', h('b', null, d.webProbe.user || '已登录'),
-            h(Btn, { className: 'sm', style: { marginLeft: 8 }, disabled: d.status !== 'confirm', onClick: async () => { await fetch(PREFIX + '/ty/native/session', { method: 'DELETE' }); update({ webProbe: { ok: false, logged: false }, webReports: null }); } }, '退出登录')) : null,
+          // 浏览器选择（仅原生模式）：默认用你自己已登录的浏览器，避免重复扫码
+          isWeb ? h('div', { className: 'wb-sec', style: { marginTop: 14 } },
+            h('div', { className: 'wb-sec-h' }, h('h2', null, '用哪个浏览器')),
+            [['browser', '我的浏览器（推荐）', '直接驱动你日常使用的 Chrome：登录态就是你现在网页上的登录态，不用再扫码。导出时会在同一个窗口里开一个后台标签页取文件，取完自动关掉。'],
+             ['ego', 'ego 独立窗口', '在工作台专属的 ego 窗口里操作；登录态与你的浏览器隔离，需要在该窗口单独扫码登录一次。']].map(([k, t, desc]) =>
+              h('label', { key: k, style: { display: 'block', padding: '7px 0', cursor: d.status === 'confirm' ? 'pointer' : 'default', opacity: d.status === 'confirm' ? 1 : .6 } },
+                h('input', { type: 'radio', name: 'rd-engine', checked: (d.engine || 'browser') === k, disabled: d.status !== 'confirm',
+                  onChange: async () => {
+                    update({ engine: k, webProbe: null, webReports: null, companies: [], selected: [], selTypes: {}, loadingCompanies: true, companyError: '', companyExpired: false, companyBridgeDown: false });
+                    const projectId = numericId(d.project.id);
+                    if (!projectId) return;
+                    const [co, web] = await Promise.all([
+                      fetch(PREFIX + '/ty/ego/companies?projectId=' + encodeURIComponent(projectId) + '&engine=' + k, { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+                      fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + k, { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+                    ]);
+                    const list = (co && co.ok && Array.isArray(co.companies)) ? co.companies : [];
+                    const selTypes = {};
+                    for (const c of list) selTypes[String(c.id)] = (c.types || []).slice().sort();
+                    update({
+                      companies: list,
+                      selected: list.filter(c => (c.types || []).length).map(c => c.id),
+                      selTypes, loadingCompanies: false,
+                      companyError: (co && !co.ok) ? (co.error || '读取公司列表失败') : '',
+                      companyExpired: !!(co && !co.ok && co.code === 'NOT_LOGGED_IN'),
+            companyBridgeDown: !!(co && !co.ok && co.code === 'BRIDGE_DISCONNECTED'),
+                      webProbe: web,
+                      webReports: (web && web.ok && web.logged && Array.isArray(web.reports)) ? web.reports : null,
+                    });
+                  } }),
+                h('b', null, ' ' + t),
+                h('div', { className: 'wb-hint', style: { marginLeft: 22 } }, desc)))) : null,
+
+          isWeb && webOk ? h('div', { className: 'wb-hint', style: { marginTop: 6 } },
+            (d.engine === 'ego' ? 'ego 窗口已登录天源' : '已连接你的浏览器，登录态正常'),
+            ' · 系统现有 ' + ((d.webReports || []).length) + ' 份文档',
+            h(Btn, { className: 'sm', style: { marginLeft: 8 }, disabled: d.status !== 'confirm', onClick: async () => {
+                const projectId = numericId(d.project.id);
+                const rr = await fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + (d.engine || 'browser'), { cache: 'no-store' }).then(x => x.json()).catch(() => null);
+                if (rr && rr.ok && rr.logged) update({ webProbe: rr, webReports: rr.reports || [], tyLoginError: '' });
+                else update({ webProbe: rr || { ok: false, logged: false }, tyLoginError: (rr && (rr.error || rr.msg)) || '重新检测失败' });
+              } }, '重新检测')) : null,
           isWeb && d.webProbe && !webOk && d.status === 'confirm' ? h('div', { className: 'wb-sec', style: { marginTop: 8, padding: 10 } },
-            h('div', { className: 'wb-label' }, '需要登录天源（浏览器扫码）'),
+            h('div', { className: 'wb-label' }, d.engine === 'ego' ? '需要在 ego 窗口登录天源' : '需要用你已登录天源的浏览器'),
             h('div', { className: 'wb-hint', style: { marginBottom: 6 } },
-              '原生导出通过本机浏览器驱动天源网页完成（不改动天源接口、不读取 Cookie）。点下方按钮会弹出浏览器窗口，在其中扫码登录天源一次即可；登录态保存在本机浏览器配置里，之后长期有效。'),
-            (d.webProbe && d.webProbe.code === 'NO_PLAYWRIGHT') ? h('div', { className: 'wb-alert danger', style: { marginBottom: 6 } }, '未检测到 playwright（需 pip install playwright 并安装 Chromium）。') : null,
+              d.engine === 'ego'
+                ? 'ego 是工作台专属的独立浏览器窗口，登录态与你的浏览器隔离。点下方按钮打开该窗口，在其中扫码登录天源一次即可。'
+                : '这个功能通过 opencli 驱动你正在用的 Chrome（不读取、不导出 Cookie，也不改动天源接口）。请先在天源网页上完成登录，并保持 Chrome 开着，然后点「重新检测」。'),
+            (d.webProbe && d.webProbe.code === 'NO_OPENCLI') ? h('div', { className: 'wb-alert danger', style: { marginBottom: 6 } }, '未找到 opencli（浏览器通道）。请安装 opencli 后重试，或切换到 ego 独立窗口。') : null,
             h('div', { className: 'wb-row' },
-              h(Btn, { className: 'sm', disabled: d.tyLogging, onClick: async () => {
-                update({ tyLogging: true, tyLoginError: '已打开浏览器，请在其中扫码登录天源（最多等 8 分钟）…' });
+              d.engine === 'ego' ? h(Btn, { className: 'sm', disabled: d.tyLogging, onClick: async () => {
+                update({ tyLogging: true, tyLoginError: '已打开 ego 登录窗口，请在其中扫码登录天源…' });
                 try {
-                  const lr = await fetch(PREFIX + '/ty/native/login', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, error: String(e.message || e) }));
-                  if (!lr || !lr.logged) { update({ tyLoginError: (lr && (lr.msg || lr.error)) || '登录未完成', tyLogging: false }); return; }
-                  const projectId = numericId(d.project.id);
-                  const rr = await fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(x => x.json());
-                  if (rr && rr.ok && rr.logged) update({ webProbe: { ok: true, logged: true }, webReports: rr.reports || [], tyLoginError: '' });
-                  else update({ webProbe: { ok: false, logged: false }, tyLoginError: (rr && (rr.error || rr.msg)) || '登录后仍无法读取报告列表' });
+                  const lr = await fetch(PREFIX + '/ty/ego/login', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, msg: String(e.message || e) }));
+                  update({ tyLoginError: (lr && (lr.msg || lr.error)) || '已打开登录窗口，扫码后点「重新检测」' });
                 } catch (e) { update({ tyLoginError: String(e.message || e) }); }
                 update({ tyLogging: false });
-              } }, '打开浏览器扫码登录'),
+              } }, '打开 ego 登录窗口') : h('span', { className: 'wb-hint' }, '请在你的 Chrome 里登录天源后点右侧按钮。'),
               h(Btn, { variant: 'pri', disabled: d.tyLogging, onClick: async () => {
                 update({ tyLogging: true, tyLoginError: '' });
                 try {
                   const projectId = numericId(d.project.id);
-                  const rr = await fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(x => x.json());
-                  if (rr && rr.ok && rr.logged) update({ webProbe: { ok: true, logged: true }, webReports: rr.reports || [] });
-                  else update({ webProbe: { ok: false, logged: false, code: rr && rr.code }, tyLoginError: (rr && (rr.error || rr.msg)) || '仍未登录' });
+                  const eng = d.engine === 'ego' ? 'ego' : 'browser';
+                  const rr = await fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + eng, { cache: 'no-store' }).then(x => x.json());
+                  if (rr && rr.ok && rr.logged) update({ webProbe: rr, webReports: rr.reports || [], tyLoginError: '' });
+                  else update({ webProbe: rr || { ok: false, logged: false }, tyLoginError: (rr && (rr.error || rr.msg)) || '仍未登录' });
                 } catch (e) { update({ tyLoginError: String(e.message || e) }); }
                 update({ tyLogging: false });
               } }, d.tyLogging ? '检测中…' : '重新检测')),
@@ -4195,6 +4244,19 @@ window.__ModuleLoader__.load({
                 (r.type ? ({ 1: '报告', 2: '说明', 3: '长投' }[r.type]) : '?'), ' · ', r.companyName || r.name || '?', ' · V', r.version, ' · ', Number(r.jobState) === 2 ? '已生成' : '状态' + (r.jobState ?? '?')))) : null
           ) : null,
 
+          // 格式处理（仅原生模式）：按「报告格式」页的表格参数处理下载到的 docx
+          isWeb ? h('div', { className: 'wb-sec', style: { marginTop: 14 } },
+            h('div', { className: 'wb-sec-h' }, h('h2', null, '格式处理')),
+            h('label', { style: { display: 'block', padding: '6px 0', cursor: d.status === 'confirm' ? 'pointer' : 'default' } },
+              h('input', { type: 'checkbox', checked: d.applyFormat !== false, disabled: d.status !== 'confirm', onChange: e => update({ applyFormat: e.target.checked }) }),
+              h('b', null, ' 按「报告格式」页的参数设置表格格式'),
+              h('div', { className: 'wb-hint', style: { marginLeft: 22 } },
+                '下载后用「评估工具箱」的表格设置模块处理，参数取自报告格式页（字体/字号/行高/边框/表头重复加粗/数字右对齐/单倍行距）；只改格式，不改任何文字。',
+                ' 已经符合这些参数的表格会整张跳过不动，附件区的表格也整段跳过——避免把原本排好的格式改坏。',
+                ' 处理失败会保留原文件并在结果里提示。')),
+            h('div', { className: 'wb-hint', style: { marginLeft: 22, marginTop: 4 } },
+              '提示：页边距、标题层级等正文排版由天源系统决定，此处不覆盖。')) : null,
+
           // 类型（JSON 重建模式用；原生模式按公司×类型矩阵逐家勾选）
           !isWeb ? h('div', { className: 'wb-sec', style: { marginTop: 14 } },
             h('div', { className: 'wb-sec-h' }, h('h2', null, '文档类型'), h('span', { className: 'wb-tag grey' }, '已选 ' + d.types.length + ' 类')),
@@ -4207,7 +4269,65 @@ window.__ModuleLoader__.load({
             h('div', { className: 'wb-sec-h' }, h('h2', null, '公司与文档'),
               h('span', { className: 'wb-tag grey' }, '已选 ' + buildReportItems(d).length + ' 份')),
             d.loadingCompanies ? h('div', { className: 'wb-hint' }, '正在读取公司×类型矩阵…')
-              : d.companyError ? h('div', { className: 'wb-alert danger' }, '读取公司失败：' + d.companyError)
+              : d.companyError ? h('div', { className: 'wb-alert danger' },
+                  h('div', null, '读取公司失败：' + d.companyError),
+                  d.companyExpired ? h('div', { style: { marginTop: 8 } },
+                    h(Btn, {
+                      className: 'sm',
+                      disabled: d.tyLogging,
+                      onClick: async () => {
+                        update({ tyLogging: true, companyExpired: false });
+                        try {
+                          const lr = await fetch(PREFIX + '/ty/ego/login', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, msg: String(e.message || e) }));
+                          update({ tyLoginError: (lr && (lr.msg || lr.error)) || '已打开登录窗口，请在该窗口扫码登录，然后点「重新检测」' });
+                        } catch (e) { update({ tyLoginError: String(e.message || e) }); }
+                        update({ tyLogging: false });
+                      },
+                    }, '打开天源登录窗口'),
+                    h('span', { className: 'wb-hint', style: { marginLeft: 8 } },
+                      '在弹出的浏览器窗口里扫码登录，完成后点「重新检测」。'))
+                  : d.companyBridgeDown ? h('div', { style: { marginTop: 8 } },
+                    h(Btn, {
+                      className: 'sm',
+                      disabled: d.tyLogging,
+                      onClick: async () => {
+                        // 先尝试自动重连 daemon（扩展会自己回来），再重新读取
+                        update({ tyLogging: true, tyLoginError: '正在尝试重连浏览器…' });
+                        const rec = await fetch(PREFIX + '/ty/ego/bridge', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, error: String(e.message || e) }));
+                        update({ tyLoginError: rec && rec.ok ? '' : String((rec && rec.error) || '自动重连失败') });
+                        update({ tyLogging: false });
+                      },
+                    }, '重连浏览器'),
+                    h(Btn, {
+                      className: 'sm',
+                      style: { marginLeft: 8 },
+                      disabled: d.tyLogging,
+                      onClick: async () => {
+                        update({ tyLogging: true, companyBridgeDown: false, companyError: '', loadingCompanies: true });
+                        const projectId = numericId(d.project.id);
+                        const [co, web] = await Promise.all([
+                          fetch(PREFIX + '/ty/ego/companies?projectId=' + encodeURIComponent(projectId) + '&engine=' + (d.engine || 'browser'), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+                          fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + (d.engine || 'browser'), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+                        ]);
+                        const list = (co && co.ok && Array.isArray(co.companies)) ? co.companies : [];
+                        const selTypes = {};
+                        for (const c of list) selTypes[String(c.id)] = (c.types || []).slice().sort();
+                        update({
+                          companies: list,
+                          selected: list.filter(c => (c.types || []).length).map(c => c.id),
+                          selTypes, loadingCompanies: false, tyLogging: false,
+                          companyError: (co && !co.ok) ? (co.error || '读取公司列表失败') : '',
+                          companyExpired: !!(co && !co.ok && co.code === 'NOT_LOGGED_IN'),
+                          companyBridgeDown: !!(co && !co.ok && co.code === 'BRIDGE_DISCONNECTED'),
+                          webProbe: web,
+                          webReports: (web && web.ok && web.logged && Array.isArray(web.reports)) ? web.reports : null,
+                        });
+                      },
+                    }, '重新检测'),
+                    h(Btn, { className: 'sm', style: { marginLeft: 8 }, disabled: d.status !== 'confirm', onClick: () => update({ engine: 'ego', companyBridgeDown: false, companyError: '', loadingCompanies: true }) }, '改用 ego 窗口'),
+                    h('div', { className: 'wb-hint', style: { marginTop: 6 } },
+                      '先在 Chrome 里确认「OpenCLI」扩展是启用状态（地址栏输入 chrome://extensions 查看），再点「重新检测」。'))
+                  : null)
               : !(d.companies || []).length ? h('div', { className: 'wb-hint' }, '未找到公司')
               : h('div', null,
                   h('div', { className: 'wb-hint', style: { marginBottom: 8 } },
@@ -6878,12 +6998,74 @@ window.__ModuleLoader__.load({
     // ---------- 数据工具（2026-11-19 移植自评估工具箱一期模块） ----------
     // 宿主路由：/api/workbench/dt/*（@local/dsh-data-tools，index.js DT_REV）
     const DT_PREFIX = PREFIX + '/dt';
-    const DT_REV = 'rev2';
+
+    // ---- 参数持久化（等价工具箱 save*/reset*Params：存浏览器本地，跨会话保留） ----
+    function dtLoadParams(key, defaults) {
+      try {
+        const raw = window.localStorage.getItem('dt.params.' + key);
+        if (!raw) return { ...defaults };
+        const saved = JSON.parse(raw);
+        return (saved && typeof saved === 'object') ? { ...defaults, ...saved } : { ...defaults };
+      } catch { return { ...defaults }; }
+    }
+    function dtSaveParams(key, value) {
+      try { window.localStorage.setItem('dt.params.' + key, JSON.stringify(value)); return true; }
+      catch { return false; }
+    }
+    function dtResetParams(key) {
+      try { window.localStorage.removeItem('dt.params.' + key); } catch { /* ignore */ }
+    }
+    // 模块级「保存参数 / 重置参数」按钮组
+    function DtParamButtons({ paramKey, snapshot, defaults, onApply, toast }) {
+      return h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+        h('button', { className: 'wb-btn sm', onClick: () => {
+          if (dtSaveParams(paramKey, snapshot)) toast('参数已保存');
+          else toast('参数保存失败（本地存储不可用）', 'warn');
+        } }, '保存参数'),
+        h('button', { className: 'wb-btn sm', onClick: () => {
+          dtResetParams(paramKey);
+          if (onApply) onApply({ ...defaults });
+          toast('已恢复默认参数');
+        } }, '重置参数'));
+    }
+
+    const DT_REV = 'rev20';
+    // DSH 桌面壳原生目录选择（preload: __DSH_DIRECTORY_PICKER__），uiWorkspace 不可用时兜底
+    function dtPickDirectory() {
+      try {
+        if (window.__DSH_DIRECTORY_PICKER__ && typeof window.__DSH_DIRECTORY_PICKER__.pick === 'function') {
+          return Promise.resolve(window.__DSH_DIRECTORY_PICKER__.pick());
+        }
+      } catch (_) { /* fallthrough */ }
+      return Promise.resolve(null);
+    }
+    function DtDirectoryField({ value, onChange, placeholder, disabled }) {
+      const [picking, setPicking] = useState(false);
+      const pick = async () => {
+        if (picking || disabled) return;
+        setPicking(true);
+        try {
+          const path = await dtPickDirectory();
+          if (path && typeof path === 'string') onChange(path);
+        } finally { setPicking(false); }
+      };
+      return h('div', { style: { display: 'flex', gap: 6, width: '100%' } },
+        h('input', { className: 'wb-input', style: { flex: 1, fontFamily: 'Menlo, monospace', fontSize: 11 }, value, placeholder: placeholder || '点击「选择目录」或粘贴路径', readOnly: false, onChange: e => onChange(e.target.value) }),
+        h('button', { className: 'wb-btn sm', onClick: pick, disabled: picking || disabled, title: '选择目录' }, picking ? '…' : '选择目录'));
+    }
     function DataTools({ toast }) {
-      const [sub, setSub] = useState('land'); // land | anjuke | map | batch | dep
+      const [sub, setSub] = useState('land'); // land | anjuke | map | batch | dep | auction | lease
+      const [catalog, setCatalog] = useState(null);
+      useEffect(() => {
+        // 行政区目录：宿主 china-regions.cjs 一次性注入（缓存）
+        if (window.__DT_REGION_CATALOG__) return;
+        fetch(DT_PREFIX + '/regions').then(r => r.json()).then(d => {
+          if (Array.isArray(d.catalog)) { window.__DT_REGION_CATALOG__ = d.catalog; setCatalog(d.catalog); }
+        }).catch(() => {});
+      }, []);
       const subTabs = [
-        ['land', '浙江土地市场网'], ['anjuke', '安居客数据'], ['map', '地图基础配置'],
-        ['batch', '表格与底稿工具'], ['dep', '折旧摊销预测'],
+        ['land', '浙江土地市场网'], ['auction', '阿里司法拍卖'], ['lease', '阿里资产租赁'],
+        ['anjuke', '安居客数据'], ['map', '地图基础配置'], ['batch', '表格与底稿工具'], ['dep', '折旧摊销预测'],
       ];
       return h('div', { className: 'wb-card', style: { padding: 16 } },
         h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' } },
@@ -6891,7 +7073,9 @@ window.__ModuleLoader__.load({
           h('span', { className: 'wb-hint' }, '移植自评估工具箱 · rev ' + DT_REV)),
         h('div', { className: 'wb-tabs', style: { margin: '10px 0 4px' } },
           subTabs.map(([k, t]) => h('button', { key: k, className: 'wb-tab ' + (sub === k ? 'on' : ''), onClick: () => setSub(k) }, t))),
-        sub === 'land' ? h(DataToolsLand, { toast }) :
+        sub === 'land' ? h(DataToolsLand, { toast, openMapSub: () => setSub('map') }) :
+          sub === 'auction' ? h(DataToolsAuction, { toast }) :
+          sub === 'lease' ? h(DataToolsLease, { toast }) :
           sub === 'anjuke' ? h(DataToolsAnjuke, { toast }) :
           sub === 'batch' ? h(DataToolsBatch, { toast }) :
           sub === 'dep' ? h(DataToolsDep, { toast }) :
@@ -6938,21 +7122,55 @@ window.__ModuleLoader__.load({
         } }, p.label));
     }
 
+    // 打开数据来源页（宿主只放行白名单域名）
+    async function dtOpenUrl(url, askHost) {
+      const u = String(url || '').trim();
+      if (!/^https:/i.test(u)) { alert('来源页地址无效：' + (u || '(空)')); return; }
+      try {
+        const r = await fetch(DT_PREFIX + '/open-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+      } catch (e) { alert('打开来源页失败：' + ((e && e.message) || e)); }
+    }
+
+    // 按当前筛选条件取来源页 URL 并打开（拍卖/租赁）
+    async function dtOpenSourceFor(mod, request) {
+      try {
+        const r = await fetch(DT_PREFIX + '/source-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mod, request }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false || !d.url) throw new Error(d.error || '未取到来源地址');
+        await dtOpenUrl(d.url);
+      } catch (e) { alert('打开来源页失败：' + ((e && e.message) || e)); }
+    }
+
     // ---- 子面板一：浙江土地市场网 ----
-    function DataToolsLand({ toast }) {
+    function DataToolsLand({ toast, openMapSub }) {
       const [regions, setRegions] = useState(null);          // [{code,name,children}]
       const [regionErr, setRegionErr] = useState('');
-      const [district, setDistrict] = useState('');
-      const [county, setCounty] = useState('');
-      const [location, setLocation] = useState('');
-      const [dateStart, setDateStart] = useState('');
-      const [dateEnd, setDateEnd] = useState('');
-      const [landUses, setLandUses] = useState([]);
-      const [generateMap, setGenerateMap] = useState(true);
-      const [maxPages, setMaxPages] = useState('200');
-      const [outputDir, setOutputDir] = useState('');
+      const LAND_DEFAULTS = { district: '', county: '', location: '', dateStart: '', dateEnd: '', landUses: [], generateMap: true, maxPages: '200', outputDir: '' };
+      const landSavedRef = useRef(null);
+      if (!landSavedRef.current) landSavedRef.current = dtLoadParams('land', LAND_DEFAULTS);
+      const lSaved = landSavedRef.current;
+      const [district, setDistrict] = useState(lSaved.district || '');
+      const [county, setCounty] = useState(lSaved.county || '');
+      // 兼容旧版保存的地市代码（如 330200）：runner 按城市名匹配，旧代码值会导致全区县被过滤为 0
+      const savedDistrictIsCode = /^\d{6}$/.test(lSaved.district || '');
+      const [location, setLocation] = useState(lSaved.location || '');
+      const [dateStart, setDateStart] = useState(lSaved.dateStart || '');
+      const [dateEnd, setDateEnd] = useState(lSaved.dateEnd || '');
+      const [landUses, setLandUses] = useState(Array.isArray(lSaved.landUses) ? lSaved.landUses : []);
+      const [generateMap, setGenerateMap] = useState(lSaved.generateMap !== false);
+      const [maxPages, setMaxPages] = useState(lSaved.maxPages || '200');
+      const [outputDir, setOutputDir] = useState(lSaved.outputDir || '');
+      const applyLandDefaults = (next) => {
+        setDistrict(next.district || ''); setCounty(next.county || ''); setLocation(next.location || '');
+        setDateStart(next.dateStart || ''); setDateEnd(next.dateEnd || '');
+        setLandUses(Array.isArray(next.landUses) ? next.landUses : []);
+        setGenerateMap(next.generateMap !== false); setMaxPages(next.maxPages || '200'); setOutputDir(next.outputDir || '');
+      };
       const [task, setTask] = useState(null);
       const [busy, setBusy] = useState(false);
+      const [paused, setPaused] = useState(false);
       const pollRef = useRef(null);
 
       const loadRegions = useCallback(async () => {
@@ -6978,6 +7196,7 @@ window.__ModuleLoader__.load({
               setTask(t);
               if (t.status !== 'running') {
                 setBusy(false);
+                setPaused(false);
                 toast(t.status === 'done' ? '土地抓取完成' : '土地抓取失败：' + (t.error || t.message || ''), t.status === 'done' ? undefined : 'danger');
               }
             }
@@ -6986,13 +7205,27 @@ window.__ModuleLoader__.load({
         return () => clearInterval(pollRef.current);
       }, [busy, toast]);
 
-      const districtObj = useMemo(() => (regions || []).find(r => r.code === district || r.name === district), [regions, district]);
+      // 官网行政区接口顶层是「浙江省」本身，children 才是 11 个地市；这里摊平一层
+      const cities = useMemo(() => {
+        const list = regions || [];
+        const province = list.length === 1 && (list[0].children || []).length ? list[0] : null;
+        return province ? (province.children || []) : list;
+      }, [regions]);
+      const districtObj = useMemo(() => cities.find(r => r.code === district || r.name === district), [cities, district]);
       const counties = (districtObj && districtObj.children) || [];
+      // 旧版把地市代码（330200）存进参数：加载行政区后换回城市名，避免 select 空显 + runner 全过滤
+      useEffect(() => {
+        if (/^\d{6}$/.test(district)) {
+          const match = cities.find(r => r.code === district);
+          if (match) setDistrict(match.name);
+        }
+      }, [cities, district]);
 
       const run = async () => {
         if (busy) return;
         if (!outputDir.trim()) { toast('请先填写输出目录（留空则用工作台默认目录）', 'warn'); return; }
         setBusy(true);
+        setPaused(false);
         try {
           const body = {
             district, county, location,
@@ -7013,6 +7246,17 @@ window.__ModuleLoader__.load({
       };
       const stop = async () => {
         try { await fetch(DT_PREFIX + '/land/stop', { method: 'POST' }); toast('已请求终止任务'); } catch { /* noop */ }
+        setPaused(false);
+      };
+      const togglePause = async () => {
+        const action = paused ? 'resume' : 'pause';
+        try {
+          const r = await fetch(DT_PREFIX + '/land/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          setPaused(action === 'pause');
+          toast(action === 'pause' ? '已暂停；点「继续采集」恢复' : '已继续采集');
+        } catch (e) { toast((action === 'pause' ? '暂停失败：' : '继续失败：') + ((e && e.message) || e), 'warn'); }
       };
 
       const resultButtons = (t) => {
@@ -7032,15 +7276,18 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
           h('label', { className: 'wb-label', style: { flex: '1 1 180px' } }, '地市',
             h('select', { className: 'wb-select', style: { width: '100%' }, value: district, onChange: e => { setDistrict(e.target.value); setCounty(''); } },
-              h('option', { value: '' }, regions && regions.length ? '全省（不限地市）' : '加载中…'),
-              (regions || []).map(r => h('option', { key: r.code, value: r.code }, r.name)))),
+              h('option', { value: '' }, cities.length ? '全省（不限地市）' : '加载中…'),
+              // 与工具箱一致：提交城市名（runner CITY_CODE_PREFIXES 按名建键），不传代码
+              cities.map(r => h('option', { key: r.code, value: r.name }, r.name)))),
           h('label', { className: 'wb-label', style: { flex: '1 1 180px' } }, '区县',
             h('select', { className: 'wb-select', style: { width: '100%' }, value: county, disabled: !counties.length, onChange: e => setCounty(e.target.value) },
               h('option', { value: '' }, counties.length ? '全区县（不限）' : '请先选择地市'),
               counties.map(c => h('option', { key: c.code, value: c.name }, c.name)))),
           h('label', { className: 'wb-label', style: { flex: '2 1 240px' } }, '位置关键词（可选）',
             h('input', { className: 'wb-input', style: { width: '100%' }, value: location, maxLength: 160, placeholder: '例如：街道、村、道路或交叉口', onChange: e => setLocation(e.target.value) })),
-          h('button', { className: 'wb-btn sm', onClick: loadRegions, disabled: busy }, '刷新行政区')),
+          h('button', { className: 'wb-btn sm', onClick: loadRegions, disabled: busy }, '刷新行政区'),
+          openMapSub ? h('button', { className: 'wb-btn sm', onClick: openMapSub }, '地图配置') : null,
+          h('button', { className: 'wb-btn sm', onClick: () => { setDistrict(''); setCounty(''); setLocation(''); setDateStart(''); setDateEnd(''); setLandUses([]); }, disabled: busy }, '清空筛选')),
         regionErr ? h('p', { className: 'wb-hint', style: { color: 'var(--wb-danger-ink,#b63225)' } }, regionErr) : null,
         // 日期 + 用途
         h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
@@ -7054,26 +7301,92 @@ window.__ModuleLoader__.load({
           h('label', { style: { display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' } },
             h('input', { type: 'checkbox', checked: generateMap, onChange: e => setGenerateMap(e.target.checked) }), '生成独立地图 HTML')),
         // 输出目录
-        h('label', { className: 'wb-label' }, '输出目录（须已存在；留空用默认：~/Documents/天源评估/个人工作台/数据工具输出/浙江土地成交公示）',
-          h('input', { className: 'wb-input', style: { width: '100%' }, value: outputDir, placeholder: '留空使用默认目录', onChange: e => setOutputDir(e.target.value) })),
+        h('label', { className: 'wb-label' }, '输出目录（须已存在；默认：~/Documents/天源评估/个人工作台/数据工具输出/浙江土地成交公示）',
+          h(DtDirectoryField, { value: outputDir, onChange: setOutputDir, placeholder: '留空使用默认目录' })),
         // 动作
         h('div', { style: { display: 'flex', gap: 8 } },
           h('button', { className: 'wb-btn', onClick: run, disabled: busy }, busy ? '任务进行中…' : '开始网络抓取'),
+          h(DtParamButtons, {
+            paramKey: 'land',
+            snapshot: { district, county, location, dateStart, dateEnd, landUses, generateMap, maxPages, outputDir },
+            defaults: LAND_DEFAULTS,
+            onApply: applyLandDefaults,
+            toast,
+          }),
+          busy ? h('button', { className: 'wb-btn sm', onClick: togglePause }, paused ? '继续采集' : '暂停采集') : null,
           busy ? h('button', { className: 'wb-btn sm', onClick: stop }, '终止任务') : null),
         h('div', { className: 'wb-card', style: { padding: 12, background: 'var(--wb-surface-2)' } },
           h('h3', { style: { margin: '0 0 6px', fontSize: 13 } }, '当前任务进度与结果'),
-          h(DataToolsProgress, { task, onOpen: resultButtons })));
+          h(DataToolsProgress, { task, onOpen: resultButtons })),
+        h(DtHistoryPanel, {
+            kind: 'land',
+            directory: (task && task.result && task.result.outputDirectory) || outputDir.trim(),
+            toast,
+            // 等价工具箱 runLandPublicityHistory：带 historyPath 重新抓取（只刷新详情，不重扫列表）
+            onRerun: async ({ path: historyPath, request: histReq, historyRefresh: allowRefresh }) => {
+              if (busy) return;
+              setBusy(true);
+              setPaused(false);
+              try {
+                const hDistrict = String(histReq.district || histReq.city || '').trim();
+                const hCounty = String(histReq.county || '').trim();
+                const hLocation = String(histReq.location || '').trim();
+                // runner 前置校验：district/county/location 全空时必须显式 provinceWide，否则报
+                // LAND_DISTRICT_OR_LOCATION_REQUIRED（历史里「全省」查询的 district/county 都是空）
+                const needProvinceWide = !hDistrict && !hCounty && !hLocation;
+                const body = {
+                  district: hDistrict, county: hCounty,
+                  location: hLocation,
+                  startDate: histReq.startDate || '', endDate: histReq.endDate || '',
+                  landUses: Array.isArray(histReq.landUses) ? histReq.landUses : [],
+                  generateMap: true,
+                  provinceWide: needProvinceWide || histReq.provinceWide === true,
+                  outputDirectory: outputDir.trim(),
+                  historyPath,
+                  historyRefresh: allowRefresh !== false,
+                };
+                const r = await fetch(DT_PREFIX + '/land/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok || !d.ok) throw new Error(d.error || d.msg || ('HTTP ' + r.status));
+                toast('已按历史记录重新抓取详情');
+              } catch (e) { setBusy(false); toast('历史重跑失败：' + ((e && e.message) || e), 'danger'); }
+            },
+          }));
+    }
+
+    /** 导入当前网址：读取本机浏览器活动标签页（安居客列表页）。 */
+    async function dtImportCurrentUrl(host) {
+      const r = await fetch(DT_PREFIX + '/current-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host: host || 'anjuke.com' }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.msg || d.error || ('HTTP ' + r.status));
+      return d.url;
     }
 
     // ---- 子面板二：安居客数据 ----
     function DataToolsAnjuke({ toast }) {
-      const [sourceUrl, setSourceUrl] = useState('');
-      const [caseType, setCaseType] = useState('auto');
-      const [maxCases, setMaxCases] = useState('10');
-      const [keyword, setKeyword] = useState('');
-      const [outputDir, setOutputDir] = useState('');
+      const ANJUKE_DEFAULTS = { sourceUrl: '', caseType: 'auto', maxCases: '10', keyword: '', waitVerification: true, screenshot: false, autoOpenResult: true, outputDir: '' };
+      const anjukeSavedRef = useRef(null);
+      if (!anjukeSavedRef.current) anjukeSavedRef.current = dtLoadParams('anjuke', ANJUKE_DEFAULTS);
+      const aSaved = anjukeSavedRef.current;
+      const [sourceUrl, setSourceUrl] = useState(aSaved.sourceUrl || '');
+      const [caseType, setCaseType] = useState(aSaved.caseType || 'auto');
+      const [maxCases, setMaxCases] = useState(aSaved.maxCases || '10');
+      const [keyword, setKeyword] = useState(aSaved.keyword || '');
+      const [waitVerification, setWaitVerification] = useState(aSaved.waitVerification !== false);
+      const [screenshot, setScreenshot] = useState(aSaved.screenshot === true);
+      // 等价工具箱 anjukePropertyAutoOpenResult（默认 true）
+      const [autoOpenResult, setAutoOpenResult] = useState(aSaved.autoOpenResult !== false);
+      const [outputDir, setOutputDir] = useState(aSaved.outputDir || '');
+      const applyAnjukeDefaults = (next) => {
+        setSourceUrl(next.sourceUrl || ''); setCaseType(next.caseType || 'auto');
+        setMaxCases(next.maxCases || '10'); setKeyword(next.keyword || '');
+        setWaitVerification(next.waitVerification !== false); setScreenshot(next.screenshot === true);
+        setAutoOpenResult(next.autoOpenResult !== false);
+        setOutputDir(next.outputDir || '');
+      };
       const [task, setTask] = useState(null);
       const [busy, setBusy] = useState(false);
+      const [paused, setPaused] = useState(false);
 
       useEffect(() => {
         if (!busy) return undefined;
@@ -7085,7 +7398,13 @@ window.__ModuleLoader__.load({
               setTask(d.task);
               if (d.task.status !== 'running') {
                 setBusy(false);
+                setPaused(false);
                 toast(d.task.status === 'done' ? '安居客采集完成' : '安居客采集失败：' + (d.task.error || d.task.message || ''), d.task.status === 'done' ? undefined : 'danger');
+                // 等价工具箱 anjukePropertyAutoOpenResult：完成后自动用默认程序打开结果页
+                const autoPath = d.task.result && d.task.result.resultHtmlPath;
+                if (autoOpenResult && d.task.status === 'done' && autoPath) {
+                  fetch(DT_PREFIX + '/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: autoPath }) }).catch(() => {});
+                }
               }
             }
           } catch { /* 下一轮再试 */ }
@@ -7098,18 +7417,22 @@ window.__ModuleLoader__.load({
         const url = sourceUrl.trim();
         if (!url) { toast('请填写安居客列表页或详情页 URL', 'warn'); return; }
         setBusy(true);
+        setPaused(false);
         try {
-          const isDetail = /anjuke\.com\/.*\/\d+\/?(\?|$)/.test(url) && !/sydc|zu\.|fangyuan|community|loupan|xiaoqu/.test(url.split('/')[2] || '') || /anjuke\.com\/(file|spian|prop|view|a)\//.test(url);
+          const isDetail = /anjuke\.com\/.+\/\d+\/?/.test(url) && !/sp-shou|sp-zu|sp-rent|xzl-shou|xzl-zu/.test(url);
           const body = {
             caseType, keyword,
             maxCases: Number(maxCases) || 10,
+            waitVerification,
+            screenshot,
+            autoOpenResult,
             outputDirectory: outputDir.trim(),
             [isDetail ? 'detailUrls' : 'listUrls']: [url],
           };
           const r = await fetch(DT_PREFIX + '/anjuke/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
           const d = await r.json().catch(() => ({}));
           if (!r.ok || !d.ok) throw new Error(d.error || d.msg || ('HTTP ' + r.status));
-          toast('已启动安居客采集任务' + (d.request && d.request.listUrls === 0 ? '' : ''));
+          toast('已启动安居客采集任务');
         } catch (e) {
           setBusy(false);
           toast('启动失败：' + ((e && e.message) || e), 'danger');
@@ -7117,12 +7440,24 @@ window.__ModuleLoader__.load({
       };
       const stop = async () => {
         try { await fetch(DT_PREFIX + '/anjuke/stop', { method: 'POST' }); toast('已请求终止任务'); } catch { /* noop */ }
+        setPaused(false);
+      };
+      const togglePause = async () => {
+        const action = paused ? 'resume' : 'pause';
+        try {
+          const r = await fetch(DT_PREFIX + '/anjuke/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          setPaused(action === 'pause');
+          toast(action === 'pause' ? '已暂停；点「继续采集」恢复' : '已继续采集');
+        } catch (e) { toast((action === 'pause' ? '暂停失败：' : '继续失败：') + ((e && e.message) || e), 'warn'); }
       };
 
       const resultButtons = (t) => {
         const res = t.result || {};
         const paths = [
           { label: '打开 Excel', path: res.excelPath },
+          { label: '打开 CSV', path: res.csvPath },
           { label: '打开结果页', path: res.resultHtmlPath },
           { label: '查看地图', path: res.mapPath },
           { label: '打开输出目录', path: res.outputDirectory || outputDir, reveal: false },
@@ -7131,9 +7466,18 @@ window.__ModuleLoader__.load({
       };
 
       return h('div', { style: { display: 'grid', gap: 14, marginTop: 8 } },
-        h('div', { className: 'wb-alert', style: { fontSize: 12 } }, '通过本机 Playwright + Chrome 打开安居客页面采集出售/租赁案例；首次运行会启动受控浏览器，如遇验证码请在弹出的浏览器窗口中人工完成。列表页须为带明确区域条件的出售/租赁列表。'),
+        h('div', { className: 'wb-alert', style: { fontSize: 12 } }, '通过本机 Playwright + Chrome 打开安居客页面采集出售/租赁案例；首次运行会启动受控浏览器，如遇验证码请在弹出的浏览器窗口中人工完成。列表页须为带明确区域条件的出售/租赁列表（如 https://hz.sydc.anjuke.com/sp-shou/xihu/）。'),
         h('label', { className: 'wb-label' }, '来源 URL（列表页或详情页）',
-          h('input', { className: 'wb-input', style: { width: '100%' }, value: sourceUrl, placeholder: '例如 https://hz.sydc.anjuke.com/xihu/ 或某案例详情页', onChange: e => setSourceUrl(e.target.value) })),
+          h('div', { style: { display: 'flex', gap: 8 } },
+            h('input', { className: 'wb-input', style: { flex: 1 }, value: sourceUrl, placeholder: '例如 https://hz.sydc.anjuke.com/sp-shou/xihu/ 或某案例详情页', onChange: e => setSourceUrl(e.target.value) }),
+            h('button', { className: 'wb-btn sm', onClick: async () => {
+              try {
+                const url = await dtImportCurrentUrl('anjuke.com');
+                setSourceUrl(url);
+                toast('已导入浏览器当前安居客页面：' + url);
+              } catch (e) { toast('导入失败：' + ((e && e.message) || e), 'warn'); }
+            }, disabled: busy }, '导入当前网址'),
+            h('button', { className: 'wb-btn sm', onClick: () => dtOpenUrl(sourceUrl), disabled: !sourceUrl.trim() }, '打开来源页'))),
         h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
           h('label', { className: 'wb-label' }, '案例类型',
             h('select', { className: 'wb-select', value: caseType, onChange: e => setCaseType(e.target.value) },
@@ -7144,14 +7488,537 @@ window.__ModuleLoader__.load({
             h('input', { className: 'wb-input', style: { width: 90 }, inputMode: 'numeric', value: maxCases, onChange: e => setMaxCases(e.target.value.replace(/\D/g, '')) })),
           h('label', { className: 'wb-label', style: { flex: '1 1 200px' } }, '关键词过滤（可选）',
             h('input', { className: 'wb-input', style: { width: '100%' }, value: keyword, maxLength: 60, onChange: e => setKeyword(e.target.value) }))),
-        h('label', { className: 'wb-label' }, '输出目录（留空用默认：~/Documents/天源评估/个人工作台/数据工具输出/安居客案例）',
-          h('input', { className: 'wb-input', style: { width: '100%' }, value: outputDir, placeholder: '留空使用默认目录', onChange: e => setOutputDir(e.target.value) })),
+        h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' } },
+          h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' }, title: '遇到验证码时轮询等待人工完成后继续，而不是直接判失败' },
+            h('input', { type: 'checkbox', checked: waitVerification, onChange: e => setWaitVerification(e.target.checked) }), '遇到验证码等待人工完成'),
+          h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' }, title: '为每个案例保存整页截图作为证据' },
+            h('input', { type: 'checkbox', checked: screenshot, onChange: e => setScreenshot(e.target.checked) }), '保存整页截图'),
+          h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' }, title: '采集完成后自动用系统默认程序打开结果页' },
+            h('input', { type: 'checkbox', checked: autoOpenResult, onChange: e => setAutoOpenResult(e.target.checked) }), '完成后自动打开结果页')),
+        h('label', { className: 'wb-label' }, '输出目录（默认：~/Documents/天源评估/个人工作台/数据工具输出/安居客案例）',
+          h(DtDirectoryField, { value: outputDir, onChange: setOutputDir, placeholder: '留空使用默认目录' })),
         h('div', { style: { display: 'flex', gap: 8 } },
           h('button', { className: 'wb-btn', onClick: run, disabled: busy }, busy ? '任务进行中…' : '开始采集'),
+          h(DtParamButtons, {
+            paramKey: 'anjuke',
+            snapshot: { sourceUrl, caseType, maxCases, keyword, waitVerification, screenshot, autoOpenResult, outputDir },
+            defaults: ANJUKE_DEFAULTS,
+            onApply: applyAnjukeDefaults,
+            toast,
+          }),
+          busy ? h('button', { className: 'wb-btn sm', onClick: togglePause }, paused ? '继续采集' : '暂停采集') : null,
           busy ? h('button', { className: 'wb-btn sm', onClick: stop }, '终止任务') : null),
         h('div', { className: 'wb-card', style: { padding: 12, background: 'var(--wb-surface-2)' } },
           h('h3', { style: { margin: '0 0 6px', fontSize: 13 } }, '当前任务进度与结果'),
           h(DataToolsProgress, { task, onOpen: resultButtons })));
+    }
+
+    // ---- 阿里司法拍卖（省市区联动 + 工具箱同款参数） ----
+    // ---- 通用：运行历史（列出 outputDirectory 下的 *_history.json 并回载） ----
+    function DtHistoryPanel({ directory, kind, toast, onLoaded, onRerun }) {
+      const [items, setItems] = useState([]);
+      const [sel, setSel] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [loadedInfo, setLoadedInfo] = useState(null);
+      // 等价工具箱 alibabaAuctionRefreshHistory：未勾选时重跑直接拒绝（桥内报 ALIBABA_HISTORY_REFRESH_REQUIRED）
+      const [refreshHistory, setRefreshHistory] = useState(true);
+
+      const refresh = useCallback(async () => {
+        if (!directory) return;
+        setBusy(true);
+        try {
+          const r = await fetch(DT_PREFIX + '/history/list', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ directory, kind: kind || '' }) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          setItems(d.items || []);
+          if (d.items && d.items.length && !d.items.some(x => x.path === sel)) setSel(d.items[0].path);
+        } catch (e) { toast('读取历史失败：' + ((e && e.message) || e), 'warn'); setItems([]); }
+        finally { setBusy(false); }
+      }, [directory, sel, toast]);
+
+      useEffect(() => { refresh(); }, [directory]);
+
+      const load = async () => {
+        if (!sel) return;
+        setBusy(true);
+        try {
+          const r = await fetch(DT_PREFIX + '/history/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: sel }) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          setLoadedInfo(d);
+          toast('已载入历史结果：' + ((d.results || []).length) + ' 条');
+          if (onLoaded) onLoaded(d);
+        } catch (e) { toast('载入历史失败：' + ((e && e.message) || e), 'danger'); }
+        finally { setBusy(false); }
+      };
+
+      return h('div', { className: 'wb-card', style: { padding: 12, background: 'var(--wb-surface-2)', display: 'grid', gap: 8 } },
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('h3', { style: { margin: 0, fontSize: 13 } }, '运行历史'),
+          h('span', { className: 'wb-hint', style: { fontSize: 12 } }, directory || '（未设置输出目录）'),
+          h('button', { className: 'wb-btn sm', onClick: refresh, disabled: busy || !directory }, '刷新历史')),
+        items.length
+          ? h('select', { className: 'wb-select', value: sel, onChange: e => setSel(e.target.value) },
+              items.map(it => h('option', { key: it.path, value: it.path }, (it.label || it.name) + '（' + (it.recordCount || 0) + ' 条）')))
+          : h('p', { className: 'wb-hint', style: { margin: 0, fontSize: 12 } }, busy ? '读取中…' : '该目录下暂无历史结果文件（*_history.json）。'),
+        items.length ? h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('button', { className: 'wb-btn sm', onClick: load, disabled: busy }, '载入所选历史'),
+          onRerun ? h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' }, title: '未勾选时只允许查看历史结果，不允许重新访问网络读取详情' },
+            h('input', { type: 'checkbox', checked: refreshHistory, onChange: e => setRefreshHistory(e.target.checked) }), '允许访问网络重新读取历史详情') : null,
+          onRerun ? h('button', { className: 'wb-btn sm', disabled: busy || !sel || !refreshHistory, onClick: async () => {
+            if (!sel) return;
+            setBusy(true);
+            try {
+              const r = await fetch(DT_PREFIX + '/history/load', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: sel }) });
+              const d = await r.json().catch(() => ({}));
+              if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+              await onRerun({ path: sel, request: d.request || {}, historyRefresh: refreshHistory });
+            } catch (e) { toast('历史重跑失败：' + ((e && e.message) || e), 'danger'); }
+            finally { setBusy(false); }
+          } }, '用此历史重新抓取') : null,
+          loadedInfo ? h('span', { className: 'wb-hint', style: { fontSize: 12 } }, '已载入 ' + ((loadedInfo.results || []).length) + ' 条') : null,
+          loadedInfo ? dtOpenButtons([
+            { label: '打开历史结果页', path: loadedInfo.htmlPath },
+            { label: '查看历史地图', path: loadedInfo.mapPath },
+          ]) : null) : null);
+    }
+
+    function DtRegionSelects({ catalog, region, setRegion }) {
+      const provinces = catalog || [];
+      const province = provinces.find(p => p.code === region.provinceCode);
+      const cities = (province && province.children) || [];
+      const city = cities.find(c => c.code === region.cityCode);
+      const districts = (city && city.children) || [];
+      return h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } },
+        h('label', { className: 'wb-label' }, '省份',
+          h('select', { className: 'wb-select', value: region.provinceCode, onChange: e => setRegion({ provinceCode: e.target.value, cityCode: '', districtCode: '' }) },
+            provinces.map(p => h('option', { key: p.code, value: p.code }, p.name)))),
+        h('label', { className: 'wb-label' }, '城市',
+          h('select', { className: 'wb-select', value: region.cityCode, disabled: !cities.length, onChange: e => setRegion({ ...region, cityCode: e.target.value, districtCode: '' }) },
+            h('option', { value: '' }, cities.length ? '全省' : '请先选省'),
+            cities.map(c => h('option', { key: c.code, value: c.code }, c.name)))),
+        h('label', { className: 'wb-label' }, '区县',
+          h('select', { className: 'wb-select', value: region.districtCode, disabled: !districts.length, onChange: e => setRegion({ ...region, districtCode: e.target.value }) },
+            h('option', { value: '' }, districts.length ? '不限定区县' : '请先选市'),
+            districts.map(d => h('option', { key: d.code, value: d.code }, d.name)))));
+    }
+
+    function DataToolsAuction({ toast }) {
+      const catalogRef = useRef(null);
+      if (!catalogRef.current) catalogRef.current = window.__DT_REGION_CATALOG__ || [];
+      const catalog = catalogRef.current;
+      // 与工具箱 DEFAULT_CONFIG 对齐，并优先读取已保存参数
+      const AUCTION_DEFAULTS = {
+        region: { provinceCode: '330000', cityCode: '330100', districtCode: '' },
+        entry: 'sf', propertyType: 'residential', status: 'finished',
+        keyword: '', startDate: '', endDate: '', maxPages: '3',
+        generateMap: true, outputDir: '',
+      };
+      const savedRef = useRef(null);
+      if (!savedRef.current) savedRef.current = dtLoadParams('auction', AUCTION_DEFAULTS);
+      const saved = savedRef.current;
+      const [region, setRegion] = useState(saved.region || AUCTION_DEFAULTS.region);
+      const [entry, setEntry] = useState(saved.entry || 'sf');
+      const [propertyType, setPropertyType] = useState(saved.propertyType || 'residential');
+      const [status, setStatus] = useState(saved.status || 'finished');
+      const [keyword, setKeyword] = useState(saved.keyword || '');
+      const [startDate, setStartDate] = useState(saved.startDate || '');
+      const [endDate, setEndDate] = useState(saved.endDate || '');
+      const [maxPages, setMaxPages] = useState(saved.maxPages || '3');
+      const [generateMap, setGenerateMap] = useState(saved.generateMap !== false);
+      const [outputDir, setOutputDir] = useState(saved.outputDir || '');
+      const [task, setTask] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [paused, setPaused] = useState(false);
+      const applyAuctionDefaults = (next) => {
+        setRegion(next.region || AUCTION_DEFAULTS.region);
+        setEntry(next.entry || 'sf');
+        setPropertyType(next.propertyType || 'residential');
+        setStatus(next.status || 'finished');
+        setKeyword(next.keyword || '');
+        setStartDate(next.startDate || '');
+        setEndDate(next.endDate || '');
+        setMaxPages(next.maxPages || '3');
+        setGenerateMap(next.generateMap !== false);
+        setOutputDir(next.outputDir || '');
+      };
+
+      useEffect(() => {
+        if (!busy) return undefined;
+        const t = setInterval(async () => {
+          try {
+            const r = await fetch(DT_PREFIX + '/auction/status', { cache: 'no-store' });
+            const d = await r.json();
+            if (d.task) {
+              setTask(d.task);
+              if (d.task.status !== 'running') {
+                setBusy(false);
+                setPaused(false);
+                toast(d.task.status === 'done' ? '拍卖抓取完成' : '拍卖抓取失败：' + (d.task.error || d.task.message || ''), d.task.status === 'done' ? undefined : 'warn');
+              }
+            }
+          } catch { /* 下一轮再试 */ }
+        }, 1500);
+        return () => clearInterval(t);
+      }, [busy, toast]);
+
+      const run = async () => {
+        if (busy) return;
+        setBusy(true);
+        setPaused(false);
+        try {
+          const province = catalog.find(p => p.code === region.provinceCode);
+          const city = (province?.children || []).find(c => c.code === region.cityCode);
+          const district = (city?.children || []).find(d => d.code === region.districtCode);
+          const body = {
+            province: province?.name || '', provinceCode: region.provinceCode,
+            city: city?.name || '', cityCode: region.cityCode,
+            district: district?.name || '', districtCode: region.districtCode,
+            entry, propertyType, status, keyword, startDate, endDate,
+            maxPages: Number(maxPages) || 3,
+            generateMap,
+            outputDirectory: outputDir.trim(),
+          };
+          const r = await fetch(DT_PREFIX + '/auction/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || d.msg || ('HTTP ' + r.status));
+          toast('已启动阿里司法拍卖抓取；如出现滑块请在浏览器完成');
+        } catch (e) {
+          setBusy(false);
+          toast('启动失败：' + ((e && e.message) || e), 'danger');
+        }
+      };
+
+      // 等价工具箱 runAlibabaAuctionHistory：带 historyPath 只重抓详情，不重扫列表
+      const runHistory = async ({ path: historyPath, request: histReq, historyRefresh: allowRefresh }) => {
+        if (busy) return;
+        setBusy(true);
+        setPaused(false);
+        try {
+          const province = catalog.find(p => p.code === (histReq.provinceCode || region.provinceCode));
+          const city = (province?.children || []).find(c => c.code === (histReq.cityCode || region.cityCode));
+          const district = (city?.children || []).find(d => d.code === (histReq.districtCode || region.districtCode));
+          const body = {
+            province: histReq.province || province?.name || '',
+            provinceCode: histReq.provinceCode || region.provinceCode,
+            city: histReq.city || city?.name || '',
+            cityCode: histReq.cityCode || region.cityCode,
+            district: histReq.district || district?.name || '',
+            districtCode: histReq.districtCode || region.districtCode,
+            entry: histReq.entry === 'zc' ? 'zc' : entry,
+            propertyType: histReq.propertyType || propertyType,
+            status: histReq.status || status,
+            keyword: histReq.keyword || '',
+            startDate: histReq.startDate || '',
+            endDate: histReq.endDate || '',
+            generateMap,
+            outputDirectory: outputDir.trim(),
+            historyPath,
+            historyRefresh: allowRefresh !== false,
+          };
+          const r = await fetch(DT_PREFIX + '/auction/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || d.msg || ('HTTP ' + r.status));
+          toast('已按历史清单重新抓取详情');
+        } catch (e) {
+          setBusy(false);
+          toast('历史重抓失败：' + ((e && e.message) || e), 'danger');
+        }
+      };
+
+      const stop = async () => {
+        try {
+          const r = await fetch(DT_PREFIX + '/auction/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          toast('已请求终止；当前条处理完后停止并写出已核验结果');
+        } catch (e) { toast('终止失败：' + ((e && e.message) || e), 'warn'); }
+      };
+
+      const togglePause = async () => {
+        const action = paused ? 'resume' : 'pause';
+        try {
+          const r = await fetch(DT_PREFIX + '/auction/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          setPaused(action === 'pause');
+          toast(action === 'pause' ? '已暂停；点「继续采集」恢复' : '已继续采集');
+        } catch (e) { toast((action === 'pause' ? '暂停失败：' : '继续失败：') + ((e && e.message) || e), 'warn'); }
+      };
+
+      // 等价工具箱 exportAlibabaAuctionExcel：用当前结果重新导出一份 Excel（抓取时已自动导出，此处为手动重导）
+      const exportExcel = async () => {
+        try {
+          const r = await fetch(DT_PREFIX + '/auction/export-excel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.msg || d.error || ('HTTP ' + r.status));
+          setTask(prev => (prev ? { ...prev, result: { ...(prev.result || {}), excelPath: d.excelPath } } : prev));
+          toast('Excel 已导出并完成校验，共 ' + (d.rowCount || 0) + ' 条');
+        } catch (e) { toast('导出 Excel 失败：' + ((e && e.message) || e), 'danger'); }
+      };
+      const resultButtons = (t) => {
+        const res = t.result || {};
+        const paths = [
+          { label: '打开结果页', path: res.htmlPath },
+          { label: '打开 Excel', path: res.excelPath },
+          { label: '查看地图', path: res.mapPath },
+        ];
+        return dtOpenButtons(paths.filter(p => p.path));
+      };
+
+      return h('div', { style: { display: 'grid', gap: 14, marginTop: 8 } },
+        h('div', { className: 'wb-alert', style: { fontSize: 12 } }, '通过 opencli 驱动你已登录的 Chrome 读取司法拍卖列表并逐条核验成交详情；如出现滑块/登录请在弹出的浏览器窗口完成（5 分钟窗口）。'),
+        h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
+          h(DtRegionSelects, { catalog, region, setRegion }),
+          h('label', { className: 'wb-label' }, '列表入口',
+            h('select', { className: 'wb-select', value: entry, onChange: e => setEntry(e.target.value) },
+              h('option', { value: 'sf' }, '司法拍卖列表'),
+              h('option', { value: 'zc' }, '阿里资产搜索（出售）'))),
+          h('label', { className: 'wb-label' }, '物业类型',
+            h('select', { className: 'wb-select', value: propertyType, onChange: e => setPropertyType(e.target.value) },
+              h('option', { value: 'residential' }, '住宅用房'),
+              h('option', { value: 'commercial' }, '商业房'))),
+          h('label', { className: 'wb-label' }, '交易状态',
+            h('select', { className: 'wb-select', value: status, onChange: e => setStatus(e.target.value) },
+              h('option', { value: 'finished' }, '已结束'),
+              h('option', { value: 'all' }, '全部状态')))),
+        h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
+          h('label', { className: 'wb-label', style: { flex: '1 1 200px' } }, '关键词（可选：标的名称、地址或法院）',
+            h('input', { className: 'wb-input', style: { width: '100%' }, value: keyword, maxLength: 100, onChange: e => setKeyword(e.target.value) })),
+          h('label', { className: 'wb-label' }, '成交时间起', h('input', { className: 'wb-input', type: 'date', value: startDate, onChange: e => setStartDate(e.target.value) })),
+          h('label', { className: 'wb-label' }, '成交时间止', h('input', { className: 'wb-input', type: 'date', value: endDate, onChange: e => setEndDate(e.target.value) })),
+          h('label', { className: 'wb-label' }, '列表页数上限', h('input', { className: 'wb-input', style: { width: 80 }, inputMode: 'numeric', value: maxPages, onChange: e => setMaxPages(e.target.value.replace(/\D/g, '')) }))),
+        h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 12 } },
+          h('label', { style: { display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' } },
+            h('input', { type: 'checkbox', checked: generateMap, onChange: e => setGenerateMap(e.target.checked) }), '生成独立地图 HTML')),
+        h('label', { className: 'wb-label' }, '输出目录（默认：~/Documents/天源评估/个人工作台/数据工具输出/阿里司法拍卖）',
+          h(DtDirectoryField, { value: outputDir, onChange: setOutputDir, placeholder: '留空使用默认目录' })),
+        h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+          h('button', { className: 'wb-btn', onClick: run, disabled: busy }, busy ? '任务进行中…' : '开始抓取'),
+          h('button', { className: 'wb-btn sm', onClick: () => dtOpenSourceFor('auction', {
+            entry, provinceCode: region.provinceCode, cityCode: region.cityCode, districtCode: region.districtCode,
+            propertyType, status, keyword, startDate, endDate,
+          }) }, '打开来源页'),
+          busy ? h('button', { className: 'wb-btn sm', onClick: togglePause }, paused ? '继续采集' : '暂停采集') : null,
+          busy ? h('button', { className: 'wb-btn sm', onClick: stop }, '终止任务') : null,
+          h('button', { className: 'wb-btn sm', onClick: exportExcel, disabled: busy || !(task && task.result && (task.result.results || []).length) }, '导出 Excel'),
+          h('button', { className: 'wb-btn sm', onClick: () => setTask(null), disabled: busy }, '清空结果'),
+          h(DtParamButtons, {
+            paramKey: 'auction',
+            snapshot: { region, entry, propertyType, status, keyword, startDate, endDate, maxPages, generateMap, outputDir },
+            defaults: AUCTION_DEFAULTS,
+            onApply: applyAuctionDefaults,
+            toast,
+          }),
+          busy ? h('span', { className: 'wb-hint', style: { alignSelf: 'center' } }, '遇到滑块/登录请在 Chrome 完成后自动继续') : null),
+        h(DtHistoryPanel, { kind: 'auction', directory: (task && task.result && task.result.outputDirectory) || outputDir.trim(), toast, onRerun: runHistory }),
+        h('div', { className: 'wb-card', style: { padding: 12, background: 'var(--wb-surface-2)' } },
+          h('h3', { style: { margin: '0 0 6px', fontSize: 13 } }, '当前任务进度与结果'),
+          h(DataToolsProgress, { task, onOpen: resultButtons })));
+    }
+
+    // ---- 阿里资产租赁 ----
+    function DataToolsLease({ toast }) {
+      const catalogRef = useRef(null);
+      if (!catalogRef.current) catalogRef.current = window.__DT_REGION_CATALOG__ || [];
+      const catalog = catalogRef.current;
+      // 与工具箱 alibaba-lease DEFAULT_CONFIG 对齐（区县默认上城区 330102）
+      const LEASE_DEFAULTS = {
+        region: { provinceCode: '330000', cityCode: '330100', districtCode: '330102' },
+        propertyType: 'residential', status: 'finished',
+        keyword: '', startDate: '', endDate: '', maxPages: '1',
+        generateMap: true, outputDir: '',
+      };
+      const leaseSavedRef = useRef(null);
+      if (!leaseSavedRef.current) leaseSavedRef.current = dtLoadParams('lease', LEASE_DEFAULTS);
+      const sSaved = leaseSavedRef.current;
+      const [region, setRegion] = useState(sSaved.region || LEASE_DEFAULTS.region);
+      const [propertyType, setPropertyType] = useState(sSaved.propertyType || 'residential');
+      const [status, setStatus] = useState(sSaved.status || 'finished');
+      const [keyword, setKeyword] = useState(sSaved.keyword || '');
+      const [startDate, setStartDate] = useState(sSaved.startDate || '');
+      const [endDate, setEndDate] = useState(sSaved.endDate || '');
+      const [maxPages, setMaxPages] = useState(sSaved.maxPages || '1');
+      const [generateMap, setGenerateMap] = useState(sSaved.generateMap !== false);
+      const [outputDir, setOutputDir] = useState(sSaved.outputDir || '');
+      const applyLeaseDefaults = (next) => {
+        setRegion(next.region || LEASE_DEFAULTS.region);
+        setPropertyType(next.propertyType || 'residential');
+        setStatus(next.status || 'finished');
+        setKeyword(next.keyword || ''); setStartDate(next.startDate || ''); setEndDate(next.endDate || '');
+        setMaxPages(next.maxPages || '1'); setGenerateMap(next.generateMap !== false); setOutputDir(next.outputDir || '');
+      };
+      const [task, setTask] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [paused, setPaused] = useState(false);
+
+      useEffect(() => {
+        if (!busy) return undefined;
+        const t = setInterval(async () => {
+          try {
+            const r = await fetch(DT_PREFIX + '/lease/status', { cache: 'no-store' });
+            const d = await r.json();
+            if (d.task) {
+              setTask(d.task);
+              if (d.task.status !== 'running') {
+                setBusy(false);
+                setPaused(false);
+                toast(d.task.status === 'done' ? '租赁抓取完成' : '租赁抓取失败：' + (d.task.error || d.task.message || ''), d.task.status === 'done' ? undefined : 'warn');
+              }
+            }
+          } catch { /* 下一轮再试 */ }
+        }, 1500);
+        return () => clearInterval(t);
+      }, [busy, toast]);
+
+      const run = async () => {
+        if (busy) return;
+        setBusy(true);
+        setPaused(false);
+        try {
+          const province = catalog.find(p => p.code === region.provinceCode);
+          const city = (province?.children || []).find(c => c.code === region.cityCode);
+          const district = (city?.children || []).find(d => d.code === region.districtCode);
+          const body = {
+            province: province?.name || '', provinceCode: region.provinceCode,
+            city: city?.name || '', cityCode: region.cityCode,
+            district: district?.name || '', districtCode: region.districtCode,
+            propertyType, status, keyword, startDate, endDate,
+            maxPages: Number(maxPages) || 2,
+            generateMap,
+            outputDirectory: outputDir.trim(),
+          };
+          const r = await fetch(DT_PREFIX + '/lease/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || d.msg || ('HTTP ' + r.status));
+          toast('已启动阿里资产租赁抓取；如出现滑块请在浏览器完成');
+        } catch (e) {
+          setBusy(false);
+          toast('启动失败：' + ((e && e.message) || e), 'danger');
+        }
+      };
+
+      // 等价工具箱「用此历史重新抓取」：租赁历史顶层用 items，桥内 readHistoryCandidates 已兼容两种格式
+      const runHistory = async ({ path: historyPath, request: histReq, historyRefresh: allowRefresh }) => {
+        if (busy) return;
+        setBusy(true);
+        setPaused(false);
+        try {
+          const province = catalog.find(p => p.code === (histReq.provinceCode || region.provinceCode));
+          const city = (province?.children || []).find(c => c.code === (histReq.cityCode || region.cityCode));
+          const district = (city?.children || []).find(d => d.code === (histReq.districtCode || region.districtCode));
+          const body = {
+            province: histReq.province || province?.name || '',
+            provinceCode: histReq.provinceCode || region.provinceCode,
+            city: histReq.city || city?.name || '',
+            cityCode: histReq.cityCode || region.cityCode,
+            district: histReq.district || district?.name || '',
+            districtCode: histReq.districtCode || region.districtCode,
+            propertyType: histReq.propertyType || propertyType,
+            status: histReq.status || status,
+            keyword: histReq.keyword || '',
+            startDate: histReq.startDate || '',
+            endDate: histReq.endDate || '',
+            generateMap,
+            outputDirectory: outputDir.trim(),
+            historyPath,
+            historyRefresh: allowRefresh !== false,
+          };
+          const r = await fetch(DT_PREFIX + '/lease/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || d.msg || ('HTTP ' + r.status));
+          toast('已按历史清单重新抓取租赁详情');
+        } catch (e) {
+          setBusy(false);
+          toast('历史重抓失败：' + ((e && e.message) || e), 'danger');
+        }
+      };
+
+      const stop = async () => {
+        try {
+          const r = await fetch(DT_PREFIX + '/lease/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          toast('已请求终止；当前条处理完后停止并写出已核验结果');
+        } catch (e) { toast('终止失败：' + ((e && e.message) || e), 'warn'); }
+      };
+
+      const togglePause = async () => {
+        const action = paused ? 'resume' : 'pause';
+        try {
+          const r = await fetch(DT_PREFIX + '/lease/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+          setPaused(action === 'pause');
+          toast(action === 'pause' ? '已暂停；点「继续采集」恢复' : '已继续采集');
+        } catch (e) { toast((action === 'pause' ? '暂停失败：' : '继续失败：') + ((e && e.message) || e), 'warn'); }
+      };
+
+      // 等价工具箱 exportAlibabaLeaseExcel：用当前结果重新导出一份 Excel（抓取时已自动导出，此处为手动重导）
+      const exportLeaseExcel = async () => {
+        try {
+          const r = await fetch(DT_PREFIX + '/lease/export-excel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || d.ok === false) throw new Error(d.msg || d.error || ('HTTP ' + r.status));
+          setTask(prev => (prev ? { ...prev, result: { ...(prev.result || {}), excelPath: d.excelPath } } : prev));
+          toast('Excel 已导出并完成校验，共 ' + (d.rowCount || 0) + ' 条');
+        } catch (e) { toast('导出 Excel 失败：' + ((e && e.message) || e), 'danger'); }
+      };
+      const resultButtons = (t) => {
+        const res = t.result || {};
+        const paths = [
+          { label: '打开结果页', path: res.htmlPath },
+          { label: '打开 Excel', path: res.excelPath },
+          { label: '查看地图', path: res.mapPath },
+        ];
+        return dtOpenButtons(paths.filter(p => p.path));
+      };
+
+      return h('div', { style: { display: 'grid', gap: 14, marginTop: 8 } },
+        h('div', { className: 'wb-alert', style: { fontSize: 12 } }, '阿里资产（zc-paimai）租赁/使用权成交采集：URL 参数自带区域与 h_t_mode 租赁筛选；逐页读取后逐条核验详情。'),
+        h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
+          h(DtRegionSelects, { catalog, region, setRegion }),
+          h('label', { className: 'wb-label' }, '物业类型',
+            h('select', { className: 'wb-select', value: propertyType, onChange: e => setPropertyType(e.target.value) },
+              h('option', { value: 'residential' }, '住宅租赁'),
+              h('option', { value: 'commercial' }, '商业租赁'))),
+          h('label', { className: 'wb-label' }, '交易状态',
+            h('select', { className: 'wb-select', value: status, onChange: e => setStatus(e.target.value) },
+              h('option', { value: 'finished' }, '已结束'),
+              h('option', { value: 'all' }, '全部状态')))),
+        h('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' } },
+          h('label', { className: 'wb-label', style: { flex: '1 1 200px' } }, '关键词（可选）',
+            h('input', { className: 'wb-input', style: { width: '100%' }, value: keyword, maxLength: 100, onChange: e => setKeyword(e.target.value) })),
+          h('label', { className: 'wb-label' }, '结束时间起', h('input', { className: 'wb-input', type: 'date', value: startDate, onChange: e => setStartDate(e.target.value) })),
+          h('label', { className: 'wb-label' }, '结束时间止', h('input', { className: 'wb-input', type: 'date', value: endDate, onChange: e => setEndDate(e.target.value) })),
+          h('label', { className: 'wb-label' }, '页数上限（1-5）', h('input', { className: 'wb-input', style: { width: 80 }, inputMode: 'numeric', value: maxPages, onChange: e => setMaxPages(e.target.value.replace(/\D/g, '')) }))),
+        h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 12 } },
+          h('label', { style: { display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' } },
+            h('input', { type: 'checkbox', checked: generateMap, onChange: e => setGenerateMap(e.target.checked) }), '生成独立地图 HTML')),
+        h('label', { className: 'wb-label' }, '输出目录（默认：~/Documents/天源评估/个人工作台/数据工具输出/阿里资产租赁）',
+          h(DtDirectoryField, { value: outputDir, onChange: setOutputDir, placeholder: '留空使用默认目录' })),
+        h('div', { style: { display: 'flex', gap: 8 } },
+          h('button', { className: 'wb-btn', onClick: run, disabled: busy }, busy ? '任务进行中…' : '开始抓取'),
+          h('button', { className: 'wb-btn sm', onClick: () => dtOpenSourceFor('lease', {
+            provinceCode: region.provinceCode, cityCode: region.cityCode, districtCode: region.districtCode,
+            propertyType, status, keyword, startDate, endDate,
+          }) }, '打开来源页'),
+          busy ? h('button', { className: 'wb-btn sm', onClick: togglePause }, paused ? '继续采集' : '暂停采集') : null,
+          busy ? h('button', { className: 'wb-btn sm', onClick: stop }, '终止任务') : null,
+          h('button', { className: 'wb-btn sm', onClick: exportLeaseExcel, disabled: busy || !(task && task.result && (task.result.results || []).length) }, '导出 Excel'),
+          h('button', { className: 'wb-btn sm', onClick: () => setTask(null), disabled: busy }, '清空结果'),
+          h(DtParamButtons, {
+            paramKey: 'lease',
+            snapshot: { region, propertyType, status, keyword, startDate, endDate, maxPages, generateMap, outputDir },
+            defaults: LEASE_DEFAULTS,
+            onApply: applyLeaseDefaults,
+            toast,
+          }),
+          busy ? h('span', { className: 'wb-hint', style: { alignSelf: 'center' } }, '遇到滑块/登录请在 Chrome 完成后自动继续') : null),
+        h('div', { className: 'wb-card', style: { padding: 12, background: 'var(--wb-surface-2)' } },
+          h('h3', { style: { margin: '0 0 6px', fontSize: 13 } }, '当前任务进度与结果'),
+          h(DataToolsProgress, { task, onOpen: resultButtons })),
+        h(DtHistoryPanel, { kind: 'lease', directory: (task && task.result && task.result.outputDirectory) || outputDir.trim(), toast, onRerun: runHistory }));
     }
 
     // ---- 子面板四：表格与底稿工具（表格设置/明细表打印/申报表打印/公式恢复） ----
@@ -7233,7 +8100,7 @@ window.__ModuleLoader__.load({
               h('option', { value: 'overwrite' }, '覆盖原文件（谨慎）'),
               h('option', { value: 'new_directory' }, '输出到指定目录'))),
           outputMode === 'new_directory' ? h('label', { className: 'wb-label', style: { flex: '1 1 260px' } }, '输出目录（须已存在）',
-            h('input', { className: 'wb-input', style: { width: '100%' }, value: outputDir, placeholder: '/path/to/输出目录', onChange: e => setOutputDir(e.target.value) })) : null),
+            h(DtDirectoryField, { value: outputDir, onChange: setOutputDir, disabled: busy })) : null),
         h('div', { style: { display: 'flex', gap: 8 } },
           h('button', { className: 'wb-btn', onClick: run, disabled: busy }, busy ? '任务进行中…' : '开始处理'),
           busy ? h('button', { className: 'wb-btn sm', onClick: async () => { try { await fetch(DT_PREFIX + '/' + toolId + '/stop', { method: 'POST' }); toast('已请求终止：当前文件处理完后停止'); } catch { /* noop */ } } }, '终止任务') : null),
@@ -7322,8 +8189,8 @@ window.__ModuleLoader__.load({
           h('button', { className: 'wb-btn', onClick: () => action('preflight'), disabled: busy }, '② 校验输入'),
           h('button', { className: 'wb-btn', onClick: () => action('run'), disabled: busy }, '③ 运行计算'),
           h('button', { className: 'wb-btn sm', onClick: () => action('status'), disabled: busy }, '读取状态')),
-        h('label', { className: 'wb-label' }, '工作簿路径（prepare 可留空 = 默认 Downloads/折旧摊销预测输入模板.xlsx）',
-          h('input', { className: 'wb-input', style: { width: '100%', fontFamily: 'Menlo, monospace', fontSize: 11 }, value: inputPath, placeholder: '/path/to/折旧摊销预测输入模板.xlsx', onChange: e => setInputPath(e.target.value) })),
+        h('label', { className: 'wb-label' }, '工作簿路径（「准备工作簿」可留空 = 默认 Downloads/折旧摊销预测输入模板.xlsx）',
+          h(DtDirectoryField, { value: inputPath, onChange: setInputPath, placeholder: '点击「选择目录」选 xlsx，或粘贴路径' })),
         h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' } },
           h('input', { type: 'checkbox', checked: withDetails, onChange: e => setWithDetails(e.target.checked) }), '同时生成年度/月度明细（较慢）'),
         h('div', { className: 'wb-card', style: { padding: 12, background: 'var(--wb-surface-2)' } },
@@ -7391,9 +8258,12 @@ window.__ModuleLoader__.load({
       const [toastMsg, setToastMsg] = useState(null);
       const [reportDirty, setReportDirty] = useState(false);
       const [sub, setSub] = useState({ work: 'projects', study: 'plans', stock: '' });
+      // 浮动对话窗的开关。放在 WorkbenchPage 里而不是模块级，是为了跟随页签切换保留、
+      // 又能在离开工作台面板时自动卸载（组件树销毁即关闭，不留幽灵浮层）。
+      const [dockOpen, setDockOpen] = useState(false);
       // 页签精简（2026-11-18）：只保留 工作/文件库/设置。历史存档里的旧 activeTab
       // （overview/study/stock/alerts）一律回落到 work，避免渲染无页签高亮的孤儿页。
-      const KEPT = ['work', 'library', 'report-format', 'data-tools', 'land-market', 'settings'];
+      const KEPT = ['work', 'assistant', 'library', 'report-format', 'data-tools', 'land-market', 'settings'];
       const tab = KEPT.includes(s.settings.activeTab) ? s.settings.activeTab : 'work';
       // 提示条：后一条提示必须顶掉前一条**连同它的定时器** —— 否则 3.2 秒前那条提示的
       // 定时器会把刚弹出的新提示提前清掉（保存 = 停在表单后连着点几下就能撞上）。
@@ -7522,13 +8392,14 @@ window.__ModuleLoader__.load({
       const unread = s.alerts.filter(a => !a.read).length;
       // 页签精简（2026-11-18）：只保留 工作/文件库/设置；想恢复全部页签，
       // 用同目录 client.js.bak-fulltabs-* 覆盖回来，或把下面数组换回七项。
-      const tabs = [['work', '工作'], ['library', '文件库'], ['report-format', '报告格式'], ['data-tools', '数据工具'], ['land-market', '土地市场法'], ['settings', '设置']];
+      const tabs = [['work', '工作'], ['assistant', '助手'], ['library', '文件库'], ['report-format', '报告格式'], ['data-tools', '数据工具'], ['land-market', '土地市场法'], ['settings', '设置']];
       return h('div', { className: 'wb-root' }, h(StyleTag, null), h('div', { className: 'wb-wrap' },
         h('h1', { className: 'wb-h1' }, '个人工作台'),
         h('p', { className: 'wb-sub' }, '资产评估项目管理 — ' + todayStr()),
         h('div', { className: 'wb-tabs' }, tabs.map(([k, t]) => h('button', { key: k, className: 'wb-tab ' + (tab === k ? 'on' : ''), onClick: () => go(k) }, t, k === 'alerts' && unread ? h('span', { className: 'wb-badge' }, unread) : null))),
         tab === 'overview' ? h(Overview, { s, go }) :
           tab === 'work' ? h(Work, { s, sub: sub.work, toast, go }) :
+          tab === 'assistant' ? h(AssistantPanel, { toast, onOpenDock: () => setDockOpen(true) }) :
           tab === 'library' ? h(LibraryPanel, { toast }) :
           tab === 'report-format' ? h(ReportFormat, { toast, onDirtyChange: setReportDirty }) :
           tab === 'data-tools' ? h(DataTools, { toast }) :
@@ -7536,6 +8407,7 @@ window.__ModuleLoader__.load({
           tab === 'study' ? h(Study, { s, sub: sub.study, toast, go }) :
           tab === 'stock' ? h(Stock, { s, toast, refresh }) :
           tab === 'alerts' ? h(Alerts, { s }) : h(Settings, { s, toast }),
+        dockOpen ? h(AssistantDock, { onClose: () => setDockOpen(false) }) : null,
         toastMsg && h('div', { style: { position: 'fixed', bottom: 24, right: 24, zIndex: 10000, padding: '10px 16px', borderRadius: 8, background: toastMsg.lv === 'danger' ? '#c0392b' : toastMsg.lv === 'warn' ? '#a35b00' : '#1d4ed8', color: '#fff', fontSize: 12, boxShadow: '0 6px 20px rgba(0,0,0,.3)' } }, toastMsg.m),
       ));
     }
@@ -7604,6 +8476,459 @@ window.__ModuleLoader__.load({
           h('div', null, cliLine),
           h('div', { className: 'wb-hint', style: { marginTop: 4 } }, 'MCP 与 CLI 凭据相互独立；项目同步与导出走 CLI/MCP，网页表单类操作走 ego 独立窗口（无需任何浏览器插件）。'))));
     }
+    // ---------- 助手（第四个模块）：工作台内的浮动对话窗 ----------
+    // 为什么不用右侧栏的 sidechat：工作台是 main slot 里的一个 keyed 主面板，
+    // 用户切到工作台后 activePanelId !== null，右侧栏的 SidebarSessionViews 拿不到
+    // selected view，controller.mounted 恒为 undefined（seat 根本没挂载），于是
+    // better-sidebar 的 openTab 在 `if (targetSessionId === void 0) return;` 静默返回、
+    // 原生 openTab(kind) 直接抛 `sidebarRight: no session surface is mounted`。
+    // 也就是说「在工作台里打开右侧对话页签」在这套架构下做不到。
+    // 所以改成自绘浮层：不依赖 sidebarRight，也不依赖 better-sidebar 是否安装。
+
+    const ASSISTANT_HINTS = ['/项目', '/状态', '/导出'];
+    // 模型选择记在 localStorage：用户挑了哪个就用哪个，重开窗口不用再挑一次。
+    const ASSISTANT_MODEL_KEY = 'dsh-workbench:assistant-model';
+    // 浮动窗位置也记下来，拖到哪儿下次还在哪儿。
+    const ASSISTANT_POS_KEY = 'dsh-workbench:assistant-pos';
+    // 对话记录也持久化：关窗、切页签、刷新页面都不丢；最多留 60 条。
+    const ASSISTANT_CHAT_KEY = 'dsh-workbench:assistant-chat';
+    const ASSISTANT_CHAT_MAX = 60;
+    const ASSISTANT_MSG_MAX_CHARS = 4000; // 单条入库截断，防止工具长结果把 localStorage 撑爆
+
+    // 这个插件其余地方直接用的是裸 localStorage；这里包一层，两个都能用，
+    // 且 localStorage 被禁用（隐私模式/配额满）时不让整块崩掉。
+    function assistantStore() {
+      try { if (typeof window !== 'undefined' && window.localStorage) return window.localStorage; } catch (_) {}
+      try { if (typeof localStorage !== 'undefined') return localStorage; } catch (_) {}
+      return null;
+    }
+
+    function readAssistantModel() {
+      try {
+        const st = assistantStore();
+        if (!st) return null;
+        const raw = st.getItem(ASSISTANT_MODEL_KEY);
+        if (!raw) return null;
+        const v = JSON.parse(raw);
+        return v && v.provider && v.model ? { provider: String(v.provider), model: String(v.model) } : null;
+      } catch (_) { return null; }
+    }
+
+    function writeAssistantModel(sel) {
+      try {
+        const st = assistantStore();
+        if (!st) return;
+        if (sel && sel.provider && sel.model) st.setItem(ASSISTANT_MODEL_KEY, JSON.stringify({ provider: sel.provider, model: sel.model }));
+        else st.removeItem(ASSISTANT_MODEL_KEY);
+      } catch (_) {}
+    }
+
+    function readAssistantPos() {
+      try {
+        const st = assistantStore();
+        if (!st) return null;
+        const raw = st.getItem(ASSISTANT_POS_KEY);
+        if (!raw) return null;
+        const v = JSON.parse(raw);
+        return v && Number.isFinite(v.x) && Number.isFinite(v.y) ? { x: v.x, y: v.y } : null;
+      } catch (_) { return null; }
+    }
+
+    function writeAssistantPos(pos) {
+      try {
+        const st = assistantStore();
+        if (!st) return;
+        st.setItem(ASSISTANT_POS_KEY, JSON.stringify({ x: Math.round(pos.x), y: Math.round(pos.y) }));
+      } catch (_) {}
+    }
+
+    // 对话记录持久化：只存 {role, content}，读回来直接当历史消息用。
+    function readAssistantChat() {
+      try {
+        const st = assistantStore();
+        if (!st) return [];
+        const raw = st.getItem(ASSISTANT_CHAT_KEY);
+        if (!raw) return [];
+        const v = JSON.parse(raw);
+        if (!Array.isArray(v)) return [];
+        return v.filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+          .slice(-ASSISTANT_CHAT_MAX);
+      } catch (_) { return []; }
+    }
+
+    function writeAssistantChat(msgs) {
+      try {
+        const st = assistantStore();
+        if (!st) return;
+        const list = (Array.isArray(msgs) ? msgs : [])
+          .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+          .slice(-ASSISTANT_CHAT_MAX)
+          .map(m => ({ role: m.role, content: m.content.slice(0, ASSISTANT_MSG_MAX_CHARS) }));
+        if (list.length) st.setItem(ASSISTANT_CHAT_KEY, JSON.stringify(list));
+        else st.removeItem(ASSISTANT_CHAT_KEY);
+      } catch (_) {}
+    }
+
+    // 把位置夹在可视区内：窗口宽高由 CSS 决定，这里只知道一个上限。
+    // 拖动/缩放后窗口可能跑到屏幕外，夹回来比让用户自己找回来体验好。
+    function clampAssistantPos(pos, size) {
+      const vw = (typeof window !== 'undefined' && window.innerWidth) || 1280;
+      const vh = (typeof window !== 'undefined' && window.innerHeight) || 800;
+      const w = Math.min(size.w, vw - 24);
+      const hgt = Math.min(size.h, vh - 24);
+      return {
+        x: Math.max(8, Math.min(pos.x, vw - w - 8)),
+        y: Math.max(8, Math.min(pos.y, vh - hgt - 8)),
+      };
+    }
+
+    function AssistantDock({ onClose }) {
+      // 对话记录从 localStorage 恢复，关窗/切页签/刷新都不丢
+      const [msgs, setMsgs] = useState(() => readAssistantChat());
+      const [input, setInput] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [err, setErr] = useState('');
+      const [meta, setMeta] = useState('');
+      const [big, setBig] = useState(false);
+      const [models, setModels] = useState(null);     // {providers, current} | {error}
+      const [sel, setSel] = useState(() => readAssistantModel());
+      // 位置用 null 表示「还没动过」，此时走右下角默认定位；一旦拖动就转成绝对坐标。
+      const [pos, setPos] = useState(() => readAssistantPos());
+      const [dragging, setDragging] = useState(false);
+      const listRef = useRef(null);
+      const rootRef = useRef(null);      // 浮层根节点，量位置用（别靠 parentElement，DOM 结构一改就错）
+      const liveRef = useRef(true);
+      const dragRef = useRef(null);      // {dx, dy} 指针与窗口左上角的偏移
+      const posRef = useRef(pos);        // 拖动中读最新值，避免闭包拿到旧 state
+      const sizeRef = useRef({ w: 420, h: 560 });
+      useEffect(() => { posRef.current = pos; }, [pos]);
+
+      useEffect(() => () => { liveRef.current = false; }, []);
+      // 对话记录变化即落盘（写入函数内部已做过滤/截断/裁剪）
+      useEffect(() => { writeAssistantChat(msgs); }, [msgs]);
+      useEffect(() => {
+        const el = listRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }, [msgs, busy]);
+
+      // 模型列表只在打开时拉一次；失败也要能继续用（后端会退回默认模型）。
+      useEffect(() => {
+        let alive = true;
+        fetch(PREFIX + '/lib/models').then(r => r.json()).then(d => {
+          if (!alive) return;
+          if (d && Array.isArray(d.providers)) setModels(d);
+          else setModels({ providers: [], error: (d && d.error) || '取不到模型列表' });
+        }).catch(e => { if (alive) setModels({ providers: [], error: String((e && e.message) || e) }); });
+        return () => { alive = false; };
+      }, []);
+
+      // 拖动：在标题栏按下时记录偏移，挂到 window 上跟随，抬起即解绑。
+      const onHeaderDown = (e) => {
+        if (e.button !== 0) return;
+        if (e.target && e.target.closest && e.target.closest('button,select,input')) return;
+        const root = rootRef.current;
+        if (!root) return;
+        const rect = root.getBoundingClientRect();
+        dragRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+        sizeRef.current = { w: rect.width, h: rect.height };
+        setDragging(true);
+        e.preventDefault();
+      };
+
+      useEffect(() => {
+        if (!dragging) return () => {};
+        const move = (e) => {
+          const d = dragRef.current;
+          if (!d) return;
+          const next = clampAssistantPos({ x: e.clientX - d.dx, y: e.clientY - d.dy }, sizeRef.current);
+          posRef.current = next;   // 同步写一份：mouseup 可能比 effect 先到，靠它拿到最终坐标
+          setPos(next);
+        };
+        const up = () => {
+          setDragging(false);
+          const cur = posRef.current;
+          if (cur) writeAssistantPos(cur);
+        };
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', up);
+        return () => {
+          window.removeEventListener('mousemove', move);
+          window.removeEventListener('mouseup', up);
+        };
+      }, [dragging]);
+
+      const resetPos = () => { setPos(null); try { const st = assistantStore(); if (st) st.removeItem(ASSISTANT_POS_KEY); } catch (_) {} };
+
+      // 放大/还原会改窗口尺寸：停在屏幕边缘的窗口可能因此越界，顺手夹一次。
+      const toggleBig = () => {
+        const next = !big;
+        setBig(next);
+        if (pos) {
+          const vw = (typeof window !== 'undefined' && window.innerWidth) || 1280;
+          const vh = (typeof window !== 'undefined' && window.innerHeight) || 800;
+          setPos(clampAssistantPos(pos, next ? { w: Math.min(860, vw - 48), h: vh - 120 } : { w: 420, h: 560 }));
+        }
+      };
+
+      const send = async (raw) => {
+        const text = String(raw == null ? input : raw).trim();
+        if (!text || busy) return;
+        setInput('');
+        setErr('');
+        const history = msgs.concat([{ role: 'user', content: text }]);
+        setMsgs(history.concat([{ role: 'assistant', content: '' }]));
+        setBusy(true);
+        const patchLast = (content) => {
+          if (!liveRef.current) return;
+          setMsgs(cur => {
+            const next = cur.slice();
+            if (!next.length) return cur;
+            next[next.length - 1] = { role: 'assistant', content };
+            return next;
+          });
+        };
+        try {
+          const body = { messages: history.map(m => ({ role: m.role, content: m.content })) };
+          if (sel && sel.provider && sel.model) { body.provider = sel.provider; body.model = sel.model; }
+          const res = await fetch(PREFIX + '/assistant/chat', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok || !res.body) {
+            const d = await res.json().catch(() => ({}));
+            throw new Error(d.error || ('HTTP ' + res.status));
+          }
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = '';
+          let acc = '';
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let idx;
+            while ((idx = buf.indexOf('\n\n')) >= 0) {
+              const block = buf.slice(0, idx);
+              buf = buf.slice(idx + 2);
+              const line = block.split('\n').filter(x => x.indexOf('data: ') === 0).pop();
+              if (!line) continue;
+              const payload = line.slice(6);
+              if (payload === '[DONE]') continue;
+              let evt = null;
+              try { evt = JSON.parse(payload); } catch (_) { continue; }
+              if (evt.type === 'text') { acc += evt.text; patchLast(acc); }
+              else if (evt.type === 'tool') { acc += '〔正在查天源 · ' + (evt.name || '') + '〕\n'; patchLast(acc); }
+              else if (evt.type === 'error') { setErr(evt.message || '模型返回错误'); }
+              else if (evt.type === 'meta' && evt.stage === 'model') { setMeta(evt.provider + ' · ' + evt.model); }
+            }
+          }
+          if (!acc) patchLast('（没有返回内容）');
+        } catch (e) {
+          if (liveRef.current) setErr(String((e && e.message) || e));
+          patchLast('');
+        } finally {
+          if (liveRef.current) setBusy(false);
+        }
+      };
+
+      const onKey = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      };
+
+      const onPickModel = (e) => {
+        const v = e.target.value;
+        if (!v) { setSel(null); writeAssistantModel(null); return; }
+        const [provider, ...rest] = v.split('|');
+        const next = { provider, model: rest.join('|') };
+        setSel(next); writeAssistantModel(next);
+      };
+
+      // 位置：拖过就用绝对坐标；没拖过就退回右下角（用 right/bottom 交给浏览器排版，
+      // 这样窗口大小变化时不会错位）。
+      const frame = big
+        ? { width: 'min(860px, calc(100vw - 48px))', height: 'calc(100vh - 120px)' }
+        : { width: 420, height: 560 };
+      const place = pos
+        ? { left: Math.round(pos.x), top: Math.round(pos.y), right: 'auto', bottom: 'auto' }
+        : { left: 'auto', top: 'auto', right: 20, bottom: 20 };
+
+      const modelOptions = (() => {
+        const out = [h('option', { key: '__auto', value: '' }, '默认模型')];
+        const providers = (models && Array.isArray(models.providers)) ? models.providers : [];
+        for (const p of providers) {
+          for (const m of (p.models || [])) {
+            out.push(h('option', { key: p.id + '|' + m.id, value: p.id + '|' + m.id },
+              (p.models.length > 1 ? (p.name || p.id) + ' · ' : '') + (m.name || m.id)));
+          }
+        }
+        return out;
+      })();
+      // 存过的模型可能已经下线：列表加载完后校验一次，失配就退回「默认模型」，
+      // 否则 <select> 会显示成空白，看着像坏了。
+      const available = !models ? null : new Set(
+        ((models.providers) || []).reduce((acc, p) => acc.concat((p.models || []).map(m => p.id + '|' + m.id)), [])
+      );
+      const wanted = sel && sel.provider && sel.model ? sel.provider + '|' + sel.model : '';
+      const selValue = wanted && available && !available.has(wanted) ? '' : wanted;
+      // 标题栏优先显示本轮实际用的模型（来自后端 meta），没发过消息就显示当前选中的那个。
+      const headerMeta = meta || (selValue ? selValue.replace('|', ' · ') : '');
+
+      return h('div', {
+        ref: rootRef,
+        role: 'dialog',
+        'aria-label': '工作台助手',
+        style: Object.assign({
+          position: 'fixed', zIndex: 9998, display: 'flex', flexDirection: 'column',
+          background: 'var(--dsw-alias-bg-l1,#fff)', color: 'var(--dsw-alias-label-primary,#111)',
+          border: '1px solid var(--dsw-alias-border-l1,#ddd)', borderRadius: 12,
+          boxShadow: dragging ? '0 18px 52px rgba(0,0,0,.30)' : '0 12px 40px rgba(0,0,0,.22)',
+          overflow: 'hidden',
+        }, frame, place),
+      },
+        // 标题栏：可拖动，双击复位到右下角。
+        h('div', {
+          onMouseDown: onHeaderDown,
+          onDoubleClick: resetPos,
+          title: '按住可拖动窗口，双击回到右下角',
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px',
+            borderBottom: '1px solid var(--dsw-alias-border-l1,#eee)',
+            background: 'var(--dsw-alias-bg-l2,#f7f7f8)',
+            cursor: dragging ? 'grabbing' : 'grab', userSelect: 'none',
+          },
+        },
+          h('strong', { style: { fontSize: 13 } }, '工作台助手'),
+          headerMeta ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary,#888)' } }, headerMeta) : null,
+          h('span', { style: { flex: 1 } }),
+          h('button', {
+            className: 'wb-btn sm',
+            disabled: busy || !msgs.length,
+            title: '清空对话记录（同时清掉本地保存的）',
+            onClick: () => { if (window.confirm && !window.confirm('清空全部对话记录？')) return; setMsgs([]); },
+          }, '清空'),
+          h('button', { className: 'wb-btn sm', onClick: toggleBig, title: big ? '还原大小' : '放大' }, big ? '还原' : '放大'),
+          h('button', { className: 'wb-btn sm', onClick: onClose, title: '关闭' }, '关闭')),
+
+        // 模型选择条：放在标题栏下面一行，不挤占对话区。
+        h('div', {
+          style: {
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            borderBottom: '1px solid var(--dsw-alias-border-l1,#eee)',
+            fontSize: 12, color: 'var(--dsw-alias-label-secondary,#666)',
+          },
+        },
+          h('span', null, '模型'),
+          h('select', {
+            value: selValue,
+            onChange: onPickModel,
+            title: '选择本对话使用的模型',
+            style: {
+              flex: 1, minWidth: 0, height: 26, borderRadius: 6, fontSize: 12,
+              border: '1px solid var(--dsw-alias-border-l1,#ddd)',
+              background: 'var(--dsw-alias-bg-l1,#fff)', color: 'inherit', padding: '0 6px',
+            },
+          }, modelOptions),
+          models && models.error
+            ? h('span', { style: { color: '#c0392b', fontSize: 11 } }, '列表不可用')
+            : null),
+
+        h('div', {
+          ref: listRef,
+          style: { flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 },
+        },
+          msgs.length === 0 ? h('div', { className: 'wb-hint', style: { lineHeight: 1.7 } },
+            '问项目进度、工时、天源绑定状态，或直接打命令。',
+            h('br'), '可用命令：',
+            ASSISTANT_HINTS.map(k => h('code', {
+              key: k, style: { marginLeft: 6, cursor: 'pointer', padding: '1px 5px', borderRadius: 4, background: 'var(--dsw-alias-bg-l2,#f0f0f2)' },
+              onClick: () => send(k),
+            }, k)),
+            h('br'), '助手只读工作台数据，不会替你改项目或跑导出。') : null,
+          msgs.map((m, i) => h('div', { key: i, style: { display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' } },
+            h('div', {
+              style: {
+                maxWidth: '86%', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.6,
+                fontSize: 13, padding: '8px 11px', borderRadius: 10,
+                background: m.role === 'user' ? '#1d4ed8' : 'var(--dsw-alias-bg-l2,#f2f3f5)',
+                color: m.role === 'user' ? '#fff' : 'inherit',
+              },
+            }, m.content || (busy && i === msgs.length - 1 ? '…' : '')))),
+          err ? h('div', { style: { fontSize: 12, color: '#c0392b', padding: '6px 2px' } }, err) : null),
+
+        h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1,#eee)', padding: 10 } },
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'flex-end' } },
+            h('textarea', {
+              className: 'wb-input',
+              rows: 2,
+              value: input,
+              placeholder: '问点什么…（Enter 发送，Shift+Enter 换行）',
+              style: { flex: 1, resize: 'none', lineHeight: 1.5, fontFamily: 'inherit' },
+              onChange: e => setInput(e.target.value),
+              onKeyDown: onKey,
+            }),
+            h('button', { className: 'wb-btn', onClick: () => send(), disabled: busy || !input.trim() }, busy ? '…' : '发送'))));
+    }
+
+    function AssistantPanel({ toast, onOpenDock }) {
+      const [mcp, setMcp] = useState(null);
+      const [cli, setCli] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const api = async (path) => {
+        const r = await fetch(PREFIX + path);
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return d;
+      };
+      const load = () => {
+        setBusy(true);
+        Promise.all([
+          api('/ty/status').catch(e => ({ error: String(e.message || e) })),
+          api('/ty/cli/status').catch(e => ({ error: String(e.message || e) })),
+        ]).then(([m, c]) => { setMcp(m); setCli(c); setBusy(false); });
+      };
+      useEffect(() => { load(); }, []);
+      const fmtExp = s => (s ? String(s).slice(0, 16).replace('T', ' ') : '');
+      const mcpOk = !!(mcp && mcp.connected);
+      const cliOk = !!(cli && cli.installed && cli.authenticated);
+      const mcpLine = !mcp ? '正在检查…'
+        : mcp.error ? '检查失败：' + mcp.error
+        : mcp.connected ? '已绑定' + (mcp.user && (mcp.user.fullName || mcp.user.userName) ? '：' + (mcp.user.fullName || mcp.user.userName) : '') + (mcp.expiresAt ? '，有效期至 ' + fmtExp(mcp.expiresAt) : '') + (mcp.toolCount ? '，' + mcp.toolCount + ' 个工具' : '')
+        : (mcp.expired ? '授权已过期，请在「工作 → 连接设置」重新连接' : '未绑定，请在「工作 → 连接设置」完成授权');
+      const cliLine = !cli ? '正在检查…'
+        : cli.error ? '检查失败：' + cli.error
+        : !cli.installed ? '未安装 tycpv CLI'
+        : cli.authenticated ? '本地凭据有效' + (cli.expiresAt ? '，至 ' + fmtExp(cli.expiresAt) : '') + '（不等于远端授权一定有效）'
+        : '无有效本地凭据，请在「工作 → 连接设置」点「授权 CLI」';
+      const dot = ok => h('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: ok ? 'var(--dsw-alias-state-success-primary,#2e7d32)' : 'var(--dsw-alias-border-l2,#aaa)', marginRight: 6 } });
+      const tools = [
+        ['/项目 [关键词]', '列出项目、工时与天源项目 ID'],
+        ['/状态', '输出工作台与天源的当前状态'],
+        ['/导出', '给出明细表 / 申报表导出的操作步骤'],
+      ];
+      return h('div', { className: 'wb-card' },
+        h('h3', null, '助手'),
+        h('div', { className: 'wb-hint', style: { marginBottom: 12 } },
+          '点下面的按钮，会在工作台页面右下角打开一个浮动对话窗：可以按住标题栏拖到任意位置（双击回到右下角），顶上能选模型；它只读你的项目数据来回答，切换页签也不会关掉。'),
+        h('div', { className: 'wb-grid', style: { marginBottom: 12 } },
+          h('div', { className: 'wb-card', style: { padding: 10 } },
+            h('div', { className: 'wb-label' }, '天源 MCP（valuation-mcp）'),
+            h('div', { style: { fontSize: 12 } }, dot(mcpOk), mcpLine)),
+          h('div', { className: 'wb-card', style: { padding: 10 } },
+            h('div', { className: 'wb-label' }, 'CLI（tycpv）'),
+            h('div', { style: { fontSize: 12 } }, dot(cliOk), cliLine))),
+        h('div', { className: 'wb-row', style: { gap: 8, marginBottom: 12 } },
+          h('button', { className: 'wb-btn', onClick: () => { if (onOpenDock) onOpenDock(); } }, '打开对话窗'),
+          h('button', { className: 'wb-btn sm', onClick: load, disabled: busy }, busy ? '检查中…' : '刷新状态')),
+        h('div', { className: 'wb-label', style: { marginBottom: 4 } }, '对话中可以直接使用的命令'),
+        h('div', { style: { border: '1px solid var(--dsw-alias-border-l1,#ddd)', borderRadius: 8, overflow: 'hidden' } },
+          tools.map(([n, d], i) => h('div', { key: n, style: { display: 'flex', gap: 10, padding: '7px 10px', fontSize: 12, borderTop: i ? '1px solid var(--dsw-alias-border-l1,#eee)' : 'none' } },
+            h('code', { style: { flex: '0 0 auto', color: 'var(--dsw-alias-label-secondary,#555)' } }, n),
+            h('span', null, d)))),
+        h('div', { className: 'wb-hint', style: { marginTop: 10 } },
+          '命令不消耗模型额度；自由提问会调用当前默认模型。所有写操作（改项目、跑导出）仍要你在界面上确认。'));
+    }
+
     const inject = ['slots', 'locale', 'layout', 'sidebarRight', 'betterSidebar'];
     function apply(ctx) {
       workspacePicker = null;

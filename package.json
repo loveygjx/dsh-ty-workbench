@@ -1,9 +1,15 @@
 {
-  "name": "@local/dsh-workbench",
+  "name": "@zer0-lyz/dsh-workbench",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "description": "个人工作台：资产评估项目管理与工时、考证学习规划与考试提醒、自选股行情与买卖点提醒",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zer0-lyz/dsh-workbench.git"
+  },
+  "keywords": ["deepseek-harness", "dsh-plugin", "dsh-bundle", "appraisal", "valuation", "workbench"],
   "icon": "icon.svg",
   "exports": {
     ".": "./index.js",
@@ -18,9 +24,19 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
+    "README.md",
+    "LICENSE",
     "tianyuan.js",
     "cli-auth.js",
     "export-workflow.js",
+    "tianyuan-web.js",
+    "tianyuan-session.js",
+    "report-ego.js",
+    "report-browser.js",
+    "opener.js",
+    "tysync.js",
+    "report-native.py",
+    "report-native-login.py",
     "data/**",
     "scanner.js",
     "scan_kb.py",
@@ -33,11 +49,7 @@
     "equity_import.py",
     "finance_import.py",
     "folders.js",
-    "archive.js",
-    "tianyuan-web.js",
-    "report-ego.js",
-    "tianyuan-session.js",
-    "tianyuan-session.test.js"
+    "archive.js"
   ],
   "dsh": {
     "manifestVersion": 1,
