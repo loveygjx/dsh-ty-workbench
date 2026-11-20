@@ -1,5 +1,5 @@
 {
-  "name": "@zer0-lyz/dsh-workbench",
+  "name": "@zer0_y/dsh-workbench",
   "version": "1.0.0",
   "private": false,
   "type": "module",
@@ -9,7 +9,14 @@
     "type": "git",
     "url": "git+https://github.com/zer0-lyz/dsh-workbench.git"
   },
-  "keywords": ["deepseek-harness", "dsh-plugin", "dsh-bundle", "appraisal", "valuation", "workbench"],
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh-bundle",
+    "appraisal",
+    "valuation",
+    "workbench"
+  ],
   "icon": "icon.svg",
   "exports": {
     ".": "./index.js",
@@ -68,5 +75,8 @@
         "@deepseek-ai/dsh-client-ui-sidebar-browser"
       ]
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
