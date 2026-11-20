@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@zer0_y/dsh-workbench',
+  id: '@zer0_y/dsh-ty-workbench',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
