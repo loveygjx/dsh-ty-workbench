@@ -318,10 +318,21 @@ async function listReportsOnce(projectId, { bin, prepared } = {}) {
   // 允许调用方先自行 prepare（避免重复开标签页）；未 prepare 时这里补上
   if (!prepared) await prepare(projectId, { bin });
   const expr = pageExpr(`
-    const res = await __api("/ty/api/report/project?pageNum=1&limit=500&projectId=" + encodeURIComponent(${JSON.stringify(String(projectId))}) + "&reportType=&companyId=");
-    if (res.code !== 200) return JSON.stringify({__err: res.code, msg: res.msg});
-    const rows = Array.isArray(res.data) ? res.data : ((res.data && res.data.list) || []);
-    return JSON.stringify(rows.map(x => ({
+    // 自适应分页：第一页满 200 继续翻页，直到拿不满一页或服务端 total 已取满。
+    // 只取第一页会漏掉新版本（胡庆余堂这类大项目行数可能超过单页 limit）。
+    const all = [];
+    const LIMIT = 200, MAXP = 50;
+    for (let page = 1; page <= MAXP; page++) {
+      const res = await __api("/ty/api/report/project?pageNum=" + page + "&limit=" + LIMIT + "&projectId=" + encodeURIComponent(${JSON.stringify(String(projectId))}) + "&reportType=&companyId=");
+      if (res.code !== 200) return JSON.stringify({__err: res.code, msg: res.msg});
+      const rows = Array.isArray(res.data) ? res.data : ((res.data && res.data.list) || []);
+      all.push(...rows);
+      if (rows.length < LIMIT) break;
+      const meta = res.data && (res.data.total !== undefined ? Number(res.data.total) : (res.data.pages !== undefined ? Number(res.data.pages) * LIMIT : null));
+      if (meta !== null && Number.isFinite(meta) && all.length >= meta) break;
+      if (page === MAXP) return JSON.stringify({__err: 'LIST_OVERFLOW', msg: '报告列表超过 ' + MAXP + ' 页仍未取完'});
+    }
+    return JSON.stringify(all.map(x => ({
       companyId: String(x.companyId), companyName: x.companyName || '',
       type: Number(x.reportType), version: Number(x.version) || 0,
       jobState: Number(x.jobState), attachId: x.attachId ? String(x.attachId) : null
@@ -422,9 +433,21 @@ async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 6000
       err.detail = e.detail || '';
       throw err;
     }
-    throw e;
+    // 基线读取失败必须整体中止：refresh 模式没有基线就分不清"旧版本"和
+    // "本次刚生成的版本"，猜基线会把旧版下载回来冒充新导出。不得降级继续。
+    const err = new Error('读取报告基线失败，已中止导出（refresh 模式需要基线区分新旧版本）：' + String((e && e.detail) || e));
+    err.code = 'BASELINE_FAILED';
+    throw err;
   }
   log('已读取现有报告 ' + before.length + ' 份');
+
+  // 每项作业记录自己的基线：同公司同类型重复任务时，第二项的基线
+  // 已包含第一项生成的版本，不会互相误判旧版本为新导出。
+  const baseline = new Map();
+  for (const r0 of before) {
+    const key = String(r0.companyId) + ':' + Number(r0.type);
+    baseline.set(key, Math.max(baseline.get(key) || 0, Number(r0.version) || 0));
+  }
 
   for (let i = 0; i < (items || []).length; i++) {
     const it = items[i];
@@ -434,9 +457,8 @@ async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 6000
       let target = null;
       if (it.mode === 'refresh') {
         const jobId = await buildReport(projectId, it.companyId, it.type, { bin });
-        const baseVer = before
-          .filter((r) => r.companyId === String(it.companyId) && r.type === Number(it.type))
-          .reduce((m, r) => Math.max(m, r.version), 0);
+        const baseKey = String(it.companyId) + ':' + Number(it.type);
+        const baseVer = baseline.get(baseKey) || 0;
         log(tag + '：任务 ' + jobId + ' 已提交（基线 V' + baseVer + '），等待生成…');
         const t0 = Date.now();
         while (Date.now() - t0 < maxWaitMs) {
@@ -444,7 +466,13 @@ async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 6000
           const rows = await listReports(projectId, { bin, prepared: true });
           const mine = rows.filter((r) => r.companyId === String(it.companyId) && r.type === Number(it.type)
             && r.version > baseVer && r.attachId && r.jobState === 2);
-          if (mine.length) { mine.sort((a, b) => b.version - a.version); target = mine[0]; break; }
+          if (mine.length) {
+            mine.sort((a, b) => b.version - a.version);
+            target = mine[0];
+            // 同类型重复任务：基线提升到本次结果，后续同项不会误判
+            baseline.set(baseKey, Math.max(baseVer, Number(target.version) || 0));
+            break;
+          }
           const anyNew = rows.filter((r) => r.companyId === String(it.companyId) && r.type === Number(it.type) && r.version > baseVer);
           log(tag + '：' + (anyNew.length ? '新版本 V' + anyNew[0].version + ' 生成中…' : '等待调度…'));
         }
