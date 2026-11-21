@@ -114,17 +114,29 @@ async function egoMain(DATA, cdp, setup, TPL) {
       emit(); return;
     }
 
-    // 列表读取（同时充当登录态探测）
+    // 列表读取（同时充当登录态探测）。自适应分页：第一页满 limit 继续翻页，
+    // 只取一页会漏掉 limit 之外的新版本。
     async function listReports() {
-      const raw = await evaluate(TPL.listExpr);
-      const j = JSON.parse(raw || '{}');
-      if (j.code !== 200) {
-        const err = new Error('NOT_LOGGED_IN');
-        err.tyMsg = j.msg || ('code ' + j.code);
-        throw err;
+      const all = [];
+      const LIMIT = 200, MAXP = 50;
+      for (let page = 1; page <= MAXP; page++) {
+        const expr = TPL.listExpr
+          .replace('pageNum=1&limit=200', 'pageNum=' + page + '&limit=' + LIMIT);
+        const raw = await evaluate(expr);
+        const j = JSON.parse(raw || '{}');
+        if (j.code !== 200) {
+          const err = new Error('NOT_LOGGED_IN');
+          err.tyMsg = j.msg || ('code ' + j.code);
+          throw err;
+        }
+        const rows = Array.isArray(j.data) ? j.data : ((j.data && j.data.list) || []);
+        all.push(...rows);
+        if (rows.length < LIMIT) break;
+        const meta = j.data && (j.data.total !== undefined ? Number(j.data.total) : (j.data.pages !== undefined ? Number(j.data.pages) * LIMIT : null));
+        if (meta !== null && Number.isFinite(meta) && all.length >= meta) break;
+        if (page === MAXP) throw new Error('LIST_OVERFLOW：报告列表超过 ' + MAXP + ' 页仍未取完');
       }
-      const rows = Array.isArray(j.data) ? j.data : ((j.data && j.data.list) || []);
-      return rows.map((x) => ({
+      return all.map((x) => ({
         companyId: String(x.companyId), type: Number(x.reportType),
         version: Number(x.version) || 0, jobState: Number(x.jobState),
         attachId: x.attachId ? String(x.attachId) : null, companyName: x.companyName || '',
@@ -143,6 +155,14 @@ async function egoMain(DATA, cdp, setup, TPL) {
       throw e;
     }
 
+    // 每项作业记录自己的基线：同公司同类型重复任务时，第二项的基线
+    // 已包含第一项生成的版本，不会互相误判旧版本为新导出。
+    const baseline = {};
+    for (const r0 of before) {
+      const k = String(r0.companyId) + ':' + Number(r0.type);
+      baseline[k] = Math.max(baseline[k] || 0, Number(r0.version) || 0);
+    }
+
     for (let i = 0; i < DATA.items.length; i++) {
       const it = DATA.items[i];
       const label = TYPE_LABEL[it.type] || ('类型' + it.type);
@@ -157,8 +177,8 @@ async function egoMain(DATA, cdp, setup, TPL) {
             .replace('TYPE', String(Number(it.type)));
           const bj = JSON.parse(await evaluate(bExpr) || '{}');
           if (bj.code !== 200) throw new Error('生成任务提交失败：' + (bj.msg || bj.code));
-          const baseVer = before.filter((r) => r.companyId === String(it.companyId) && r.type === Number(it.type))
-            .reduce((m, r) => Math.max(m, r.version), 0);
+          const baseKey = String(it.companyId) + ':' + Number(it.type);
+          const baseVer = baseline[baseKey] || 0;
           log(tag + '：任务 ' + bj.data + ' 已提交（基线 V' + baseVer + '），等待生成…');
           const t0 = Date.now();
           const maxWait = Number(DATA.maxWaitMs) || 600000;
@@ -168,7 +188,12 @@ async function egoMain(DATA, cdp, setup, TPL) {
             const rows = await listReports();
             const mine = rows.filter((r) => r.companyId === String(it.companyId) && r.type === Number(it.type)
               && r.version > baseVer && r.attachId && r.jobState === 2);
-            if (mine.length) { mine.sort((a, b) => b.version - a.version); target = mine[0]; break; }
+            if (mine.length) {
+              mine.sort((a, b) => b.version - a.version);
+              target = mine[0];
+              baseline[baseKey] = Math.max(baseVer, Number(target.version) || 0);
+              break;
+            }
             const anyNew = rows.filter((r) => r.companyId === String(it.companyId) && r.type === Number(it.type) && r.version > baseVer);
             log(tag + '：' + (anyNew.length ? '新版本 V' + anyNew[0].version + ' 生成中…' : '等待调度…'));
           }

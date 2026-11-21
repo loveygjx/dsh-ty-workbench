@@ -21,8 +21,8 @@
 
 ```bash
 # 1. clone 到任意目录
-git clone https://github.com/zer0-lyz/dsh-workbench.git
-cd dsh-workbench
+git clone https://github.com/zer0-lyz/dsh-ty-workbench.git
+cd dsh-ty-workbench
 
 # 2. 语法检查（改完必须过）
 node --check index.js && node --check client.js

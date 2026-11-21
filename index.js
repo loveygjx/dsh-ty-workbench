@@ -1829,13 +1829,22 @@ export function apply(ctx) {
                 for (const f of (r.files || [])) {
                   try {
                     const buf = Buffer.from(String(f.base64 || ''), 'base64');
-                    if (buf.length < 4 || buf.slice(0, 2).toString('hex') !== '504b') { errors.push((f.fileName || '未知文件') + '：ZIP 校验失败'); continue; }
+                    // 产物完整性校验：不凭扩展名与退出码。完整解析 ZIP + 必需部件，
+                    // 损坏 ZIP / 缺 document.xml / 非 OOXML 在这里拦截，不落盘。
+                    const chk = await tySession.validateDocx(buf);
+                    if (!chk.ok) { errors.push((f.fileName || '未知文件') + '：下载内容校验失败——' + chk.reason); continue; }
                     const p = join(outDir, f.fileName || ('report-' + Date.now() + '.docx'));
-                    await writeFile(p, buf);
-                    const rec = { file: p, company: f.companyName, companyId: f.companyId, type: f.type, version: f.version, bytes: buf.length, formatted: false };
+                    // 不覆盖发布：同名已存在时落成 -2/-3 序号
+                    let finalPath = p;
+                    let seq = 2;
+                    while (existsSync(finalPath)) { finalPath = p.replace(/\.docx$/i, '-' + seq + '.docx'); seq++; }
+                    const tmpPath = finalPath + '.part';
+                    await writeFile(tmpPath, buf);
+                    await rename(tmpPath, finalPath);
+                    const rec = { file: finalPath, company: f.companyName, companyId: f.companyId, type: f.type, version: f.version, bytes: buf.length, formatted: false };
                     if (applyFormat) {
                       try {
-                        const fm = await applyDocxTableFormat(p);
+                        const fm = await applyDocxTableFormat(finalPath);
                         rec.formatted = true;
                         rec.tables = fm.tables;
                         rec.cells = fm.cells;
@@ -1957,9 +1966,32 @@ export function apply(ctx) {
             (async () => {
               const files = []; const errors = [];
               try {
-                // 提交前快照：现有版本表，refresh 模式用于识别"新版本"
+                // 独立批次目录：绝不把旧导出误当本次结果，也绝不覆盖已有文件。
+                // 同名公司、并发作业、重复任务都落在各自批次里，事后可区分。
+                let batchDir = '';
+                try {
+                  batchDir = await mkdtemp(join(outDir, '批次-'));
+                } catch (e) {
+                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: ['无法创建导出批次目录：' + String(e.message || e)], outDir, message: '导出失败' });
+                  return;
+                }
+                try { rememberExportBatch(batchDir); } catch (_) {}
+                // 提交前基线快照：refresh 模式靠它识别"新版本"。
+                // 获取失败必须停该项——猜基线会把旧版本当成刚生成的下载回来。
                 let before = [];
-                try { before = await tySession.listReports(projectId); } catch (_) {}
+                try { before = await tySession.listReports(projectId); }
+                catch (e) {
+                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: ['读取报告基线失败，已中止（refresh 模式无法区分新旧版本，不得猜测）：' + String(e.message || e)], outDir, message: '导出失败：读取报告基线失败' });
+                  return;
+                }
+                // 每项作业记录自己的基线：同公司同类型重复任务时，
+                // 第二项的基线已包含第一项生成的版本，不会互相误判。
+                const baseline = new Map();
+                for (const r0 of before) {
+                  const key = String(r0.companyId) + ':' + Number(r0.type);
+                  const v = Number(r0.version) || 0;
+                  baseline.set(key, Math.max(baseline.get(key) || 0, v));
+                }
                 for (let i = 0; i < items.length; i++) {
                   const it = items[i];
                   const label = TYPE_LABEL[Number(it.type)];
@@ -1967,13 +1999,13 @@ export function apply(ctx) {
                   try {
                     let attachId = null, version = null;
                     if (it.mode === 'refresh') {
+                      const baseKey = String(it.companyId) + ':' + Number(it.type);
+                      const baseVer = baseline.get(baseKey) || 0;
                       msg('提交生成任务…');
                       const build = await tySession.buildReport(projectId, it.companyId, Number(it.type));
-                      msg(`任务 ${build.jobId} 已提交，等待生成…`);
+                      msg(`任务 ${build.jobId} 已提交，等待生成（基线 V${baseVer}）…`);
                       // 轮询：最多 10 分钟，等待该公司该类型出现"更高版本且带 attachId"
                       const t0 = Date.now();
-                      let baseVer = 0;
-                      for (const r0 of before) if (r0.companyId === it.companyId && r0.type === Number(it.type)) baseVer = Math.max(baseVer, Number(r0.version) || 0);
                       while (Date.now() - t0 < 600000) {
                         await new Promise(res => setTimeout(res, 8000));
                         const rows = await tySession.listReports(projectId);
@@ -1981,6 +2013,8 @@ export function apply(ctx) {
                         if (mine.length) {
                           mine.sort((a, b2) => Number(b2.version) - Number(a.version));
                           attachId = mine[0].attachId; version = mine[0].version;
+                          // 同类型重复任务：后续项的基线提升到本次结果，避免再等旧值
+                          baseline.set(baseKey, Math.max(baseVer, Number(version) || 0));
                           break;
                         }
                         const anyNew = rows.filter(r => r.companyId === it.companyId && r.type === Number(it.type) && Number(r.version) > baseVer);
@@ -2000,8 +2034,13 @@ export function apply(ctx) {
                     const chk = await tySession.validateDocx(buf);
                     if (!chk.ok) throw new Error('下载文件校验失败：' + chk.reason);
                     const safeName = String(it.companyName).replace(/[\/:*?"<>|]/g, '_');
-                    const outPath = join(outDir, `${safeName}-${label}-V${version}.docx`);
-                    await writeFile(outPath, buf);
+                    // 不覆盖发布：目标名已存在时落成 -2/-3 序号，先写临时文件再原子改名
+                    let outPath = join(batchDir, `${safeName}-${label}-V${version}.docx`);
+                    let seq = 2;
+                    while (existsSync(outPath)) { outPath = join(batchDir, `${safeName}-${label}-V${version}-${seq}.docx`); seq++; }
+                    const tmpPath = outPath + '.part';
+                    await writeFile(tmpPath, buf);
+                    await rename(tmpPath, outPath);
                     files.push({ file: outPath, company: it.companyName, companyId: it.companyId, type: Number(it.type), version });
                     setProg({ status: 'running', stage: 'running', total: items.length, done: i + 1, files, errors, outDir, message: `[${i + 1}/${items.length}] 已完成 ${it.companyName} · ${label} V${version}` });
                   } catch (e) {
