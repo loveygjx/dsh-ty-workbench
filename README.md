@@ -53,6 +53,7 @@ node --check index.js && node --check client.js
 - **改宿主半侧（index.js）需重启 DSH**；改 client.js 刷新页面即可。
 - 每次提交前跑 `node --check`；涉及导出/整理逻辑的改动请在**隔离临时目录 + 模拟脚本**下自测，不要用真实项目数据。
 - 大改动先开 Issue 讨论；PR 请附验证方式与未验证边界。
+- **浏览器操作规则**：开发、测试与模块验收中的浏览器操作，优先使用 opencli（DSH 浏览器代理）执行——站点适配器 `site` → 通用 `opencli_*` → 动手前 `site_knowledge`；细节见 `AGENTS.md`。
 
 ### 提交 Pull Request（协作者/外部贡献者）
 
