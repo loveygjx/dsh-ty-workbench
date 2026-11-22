@@ -54,6 +54,20 @@ node --check index.js && node --check client.js
 - 每次提交前跑 `node --check`；涉及导出/整理逻辑的改动请在**隔离临时目录 + 模拟脚本**下自测，不要用真实项目数据。
 - 大改动先开 Issue 讨论；PR 请附验证方式与未验证边界。
 
+### 提交 Pull Request（协作者/外部贡献者）
+
+1. **从 main 拉新分支**（不要直接在 main 上改）：
+   ```bash
+   git checkout main && git pull origin main
+   git checkout -b fix/改动简述
+   ```
+2. 修改 → `node --check index.js && node --check client.js` → 涉及导出/整理的改动在临时目录 + 模拟数据下自测。
+3. **提交前自查 diff 不含**：token/cookie/授权链接（如 `zhmcp_...`）、真实项目名与人名、本机绝对路径、凭据文件内容。
+4. push 分支后在 GitHub 点 **Compare & pull request**，正文写清四项：改了什么 / 为什么 / 怎么验证的 / 已知未验证边界。
+5. 没有写权限的外部贡献者走标准 fork 流程（Fork → 在自己副本开发 → 向本仓库提 PR）；内部协作者由所有者加为 Collaborator 后可直接 push 分支。
+
+完整协作指南见仓库根目录的 `COLLABORATING.md`（含无权限 fallback、合并后同步、Issue 规范）。
+
 ## 天源系统真实对接（本轮新增）
 
 天源 CLI（`tycpv`，安装见下文「环境要求」），MCP 端点 `https://mcp.zhrdc.net/valuation-mcp`。插件实现与 `tycpv login` 同构的 **PKCE OAuth**：
