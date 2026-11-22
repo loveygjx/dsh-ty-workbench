@@ -1,0 +1,25 @@
+# 本机凭据与状态（绝不入库）
+.tycpv/
+*.secret.json
+token.secret.json
+
+# Python 运行产物
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 备份与临时文件
+*.bak-*
+*.bak
+*.tmp
+.DS_Store
+
+# 本地工作簿与导出产物
+*.xlsx
+*.xlsm
+*.docx
+!test-fixtures/*.xlsx
+
+# DSH 本机标记
+workbench-host-applied.json

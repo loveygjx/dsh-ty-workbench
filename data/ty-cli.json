@@ -1,0 +1,57 @@
+[
+  {
+    "c": "tycpv login",
+    "d": "打开浏览器登录并授权 tycpv-agent-cli",
+    "x": "tycpv login"
+  },
+  {
+    "c": "tycpv logout",
+    "d": "退出登录并作废本机凭据",
+    "x": "tycpv logout"
+  },
+  {
+    "c": "tycpv import-asset-draft-data",
+    "d": "导入资产基础法底稿数据",
+    "x": "tycpv import-asset-draft-data --help"
+  },
+  {
+    "c": "tycpv export-asset-detail-table",
+    "d": "导出资产基础法明细表",
+    "x": "tycpv export-asset-detail-table --help"
+  },
+  {
+    "c": "tycpv export-asset-declare-table",
+    "d": "导出资产基础法申报表",
+    "x": "tycpv export-asset-declare-table --help"
+  },
+  {
+    "c": "tycpv export-asset-summary-table",
+    "d": "导出资产基础法公司汇总表",
+    "x": "tycpv export-asset-summary-table --help"
+  },
+  {
+    "c": "tycpv export-income-summary-table",
+    "d": "导出收益法公司汇总表",
+    "x": "tycpv export-income-summary-table --help"
+  },
+  {
+    "c": "tycpv export-report-full-json",
+    "d": "导出报告全量 JSON",
+    "x": "tycpv export-report-full-json --help"
+  },
+  {
+    "c": "tycpv download-report-attachment",
+    "d": "按附件 ID 下载指定附件",
+    "x": "tycpv download-report-attachment --help"
+  },
+  {
+    "c": "tycpv export-estimate-second-file",
+    "d": "下载资产基础法估算二级文件及其附件",
+    "x": "tycpv export-estimate-second-file --help"
+  },
+  {
+    "c": "tycpv export-income-second-file",
+    "d": "下载收益法二级文件及其附件",
+    "x": "tycpv export-income-second-file --help"
+  }
+]
