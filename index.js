@@ -22,6 +22,8 @@ import * as kbqa from './kbqa.js';
 import * as scanner from './scanner.js';
 import * as store from './store.js';
 import { planProjectFolders } from './folders.js';
+import { dataToolsRoutes, DATA_TOOLS_REV } from './data-tools.js';
+import { reportFormatRequest } from './report-format.js';
 import * as archive from './archive.js';
 import { buildData as tySyncData, runSync as tySyncRun, resolveEgoBin, spawnEgoScript, openSyncSpace, runSyncBridge, bridgeReady } from './tysync.js';
 
@@ -1477,7 +1479,7 @@ export function apply(ctx) {
   const G = globalThis;
   // 版本号写进 ~/.dsh/workbench-host-applied.json 的 rev 字段，排障时用来确认
   // 运行中的进程到底加载了哪一版宿主代码。改了宿主逻辑就往上加一。
-  const REV = 'rev49';
+  const REV = 'rev53';
   // 路由归属表：path -> 「注册它的那个 apply() 实例」的 token。
   //
   // 为什么不用「REV 布尔标记挡住第二次 apply」：宿主半侧有两个 entry（主包 + 仅宿主的
@@ -2767,6 +2769,34 @@ export function apply(ctx) {
       },
     },
     {
+      // 汇率（合同金额折人民币用）：GET /fx?date=YYYY-MM-DD&base=USD
+      // 数据源 ECB 参考汇率（经 Frankfurter 分发，无需 Key），支持历史任意日期。
+      // 注意：IMF 官方 ER 数据集（SDMX 2.1）实测对这些币种返回空集，
+      // 试过 COUNTRY/INDICATOR/TYPE_OF_TRANSFORMATION/FREQUENCY 六种维度写法和 xml/csv/json 三种格式都不出数，
+      // 所以口径用 ECB——它与 IMF IFS 同为央行/官方参考汇率，且按日可取、可复现。
+      path: PREFIX + '/fx', methods: ['GET', 'HEAD'], fetch: async (req) => {
+        try {
+          const u = new URL(req.url);
+          const date = String(u.searchParams.get('date') || '').slice(0, 10);
+          const base = String(u.searchParams.get('base') || 'USD').toUpperCase();
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ ok: false, error: 'date 需要 YYYY-MM-DD' }, 400);
+          // 一次把 ECB 支持的 30 个币种全取回来，前端按币种名查表即可（少一次往返、也便于换币种时立即换算）
+          const targets = ['CNY', 'AUD', 'BRL', 'CAD', 'CHF', 'CZK', 'DKK', 'EUR', 'GBP', 'HKD', 'HUF', 'IDR', 'ILS', 'INR', 'ISK', 'JPY', 'KRW', 'MXN', 'MYR', 'NOK', 'NZD', 'PHP', 'PLN', 'RON', 'SEK', 'SGD', 'THB', 'TRY', 'USD', 'ZAR'];
+          const url = 'https://api.frankfurter.app/' + date + '?from=' + base + '&to=' + targets.filter((x) => x !== base).join(',');
+          const r = await fetch(url, { headers: { 'User-Agent': 'dsh-workbench' } });
+          if (!r.ok) return json({ ok: false, error: '汇率源返回 HTTP ' + r.status }, 502);
+          const j = await r.json().catch(() => null);
+          if (!j || !j.rates) return json({ ok: false, error: '汇率源返回格式异常' }, 502);
+          const out = {};
+          Object.keys(j.rates).forEach((k) => { out[k] = Number(j.rates[k]); });
+          return json({
+            ok: true, date: j.date || date, base: base, rates: out,
+            supported: targets, source: 'ECB reference rates (via Frankfurter)',
+          });
+        } catch (e) { return json({ ok: false, error: String((e && e.message) || e) }, 500); }
+      },
+    },
+    {
       // 可用模型清单（合同解析用）：GET /company/models
       path: PREFIX + '/company/models', methods: ['GET', 'HEAD'], fetch: async () => {
         try {
@@ -2960,6 +2990,14 @@ export function apply(ctx) {
       // 工作台「助手」浮动对话窗的后端：SSE 流式回答，只读上下文 + 白名单命令
       path: PREFIX + '/assistant/chat', methods: ['POST'], fetch: async (req) => runAssistantChat(ctx, req),
     },
+    ...dataToolsRoutes(PREFIX),
+    {
+      // 报告格式配置：report-format.js 里 reportFormatRequest() 已经写好了完整的
+      // GET/POST 处理（字段校验、重复键检测、临时文件 + 原子改名），但一直没有挂进这张
+      // 路由表，前端的 /report-format 请求就落到 connection.fetch 的兜底 404，
+      // 面板上显示「读取失败：HTTP 404: not found」。
+      path: PREFIX + '/report-format', methods: ['GET', 'POST'], fetch: async (req) => reportFormatRequest(req),
+    },
     {
       path: PREFIX + '/data/calendar', methods: ['GET', 'HEAD'], fetch: async () => {
         try {
@@ -3014,6 +3052,8 @@ export function apply(ctx) {
           libRev: typeof lib.resolveLibPath === 'function' ? 'rev13' : 'old',
           // 数据落盘层（默认目录 / 配置文件路径）也在标记里露一眼，排障时不用反查代码
           storeRev: typeof store.writeState === 'function' ? 'rev13' : 'old',
+          // 数据工具（/dt/*）宿主半侧版本：null = 这一版还没加载 data-tools.js
+          dataToolsRev: DATA_TOOLS_REV || null,
           // macOS 移植：把实际解析到的 python 候选链露出来，取文/导入失败时能一眼定位
           python: PYTHON_CANDIDATES,
           serving: mine.length ? 'this-entry' : 'other-entry',
@@ -3046,7 +3086,7 @@ export function apply(ctx) {
     disposers.push(tools.register({
       name: 'workbench_projects',
       isConcurrencySafe: () => true,
-      description: '列出个人工作台里的项目与工时记录。只读，不会修改任何数据。需要项目的天源数字 ID 时用这个（字段 tyId）。',
+      description: '列出 个人工作台里的项目与工时记录。只读，不会修改任何数据。需要项目的天源数字 ID 时用这个（字段 tyId）。',
       parameters: {
         type: 'object',
         properties: {
@@ -3093,7 +3133,7 @@ export function apply(ctx) {
     disposers.push(tools.register({
       name: 'workbench_status',
       isConcurrencySafe: () => true,
-      description: '查看个人工作台与天源系统的绑定状态：MCP 是否连通（只报连通性与工具数）、CLI 本地凭据是否存在及到期时间。不会返回任何凭据内容。',
+      description: '查看 个人工作台与天源系统的绑定状态：MCP 是否连通（只报连通性与工具数）、CLI 本地凭据是否存在及到期时间。不会返回任何凭据内容。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: { schema: outSchema, render: (_a, v) => text(v) },
       async execute() {
