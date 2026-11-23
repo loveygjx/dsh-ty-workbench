@@ -267,11 +267,12 @@ function defaultRoutes(result) {
   ];
 }
 
-// 把页面推进到「已选公司/版本 + 已完成比对」
+// 把页面推进到「已选公司/版本 + 已完成比对」。
+// 项目确认改成了两段式：先在下拉里选项目，再点「确认项目」——确认前不发天源请求。
 async function driveToResult(api, runtime, fetch, W, result, props = STORE_PROPS) {
   fetch.set(defaultRoutes(result));
-  mount(runtime, api.ReportComparePage, props);
-  // 项目默认值 → 公司列表 → 版本列表，每步都是一个异步 effect
+  await driveToConfirmed(api, runtime, fetch, W, props);
+  // 项目已确认 → 公司列表 → 版本列表，每步都是一个异步 effect
   for (let i = 0; i < 8; i++) { await flush(); mount(runtime, api.ReportComparePage, props); }
 
   let tree = mount(runtime, api.ReportComparePage, props);
@@ -281,6 +282,22 @@ async function driveToResult(api, runtime, fetch, W, result, props = STORE_PROPS
 
   W.button(tree, '开始比对').props.onClick();
   for (let i = 0; i < 6; i++) { await flush(); mount(runtime, api.ReportComparePage, props); }
+  return mount(runtime, api.ReportComparePage, props);
+}
+
+// 只推进到「项目已确认」（公司列表已读取）。模拟：下拉选项目 → 点「确认项目」。
+async function driveToConfirmed(api, runtime, fetch, W, props = STORE_PROPS) {
+  mount(runtime, api.ReportComparePage, props);
+  let tree = mount(runtime, api.ReportComparePage, props);
+  const sel = W.nodes(tree, n => n.type === 'select')[0];
+  assert.ok(sel, '项目下拉应存在');
+  sel.props.onChange({ target: { value: PROJECT_ID } });
+  tree = mount(runtime, api.ReportComparePage, props);
+  // 确认前不得发任何天源请求
+  assert.equal(fetch.calls.some(c => c.url.includes('/ty/report-companies')), false,
+    '确认项目之前不能读取公司列表');
+  W.button(tree, '确认项目').props.onClick();
+  for (let i = 0; i < 8; i++) { await flush(); mount(runtime, api.ReportComparePage, props); }
   return mount(runtime, api.ReportComparePage, props);
 }
 
@@ -315,17 +332,17 @@ test('Table 必须传数组 rows —— candidateTable 的兜底依赖这个前�
   assert.throws(() => mount(runtime, api.Table, { cols: ['a'], rows: null }));
 });
 
-test('公司列表来自 get_project_companies，单公司自动选中', async () => {
+test('公司列表来自 get_project_companies，单公司自动选中；确认前不发天源请求', async () => {
   const fetch = makeFetch();
   const { api, runtime } = loadClient(fetch.impl);
   const W = makeWalker(api);
   fetch.set(defaultRoutes(compareResult()));
-  mount(runtime, api.ReportComparePage, STORE_PROPS);
+  await driveToConfirmed(api, runtime, fetch, W);
   for (let i = 0; i < 8; i++) { await flush(); mount(runtime, api.ReportComparePage, STORE_PROPS); }
   const tree = mount(runtime, api.ReportComparePage, STORE_PROPS);
 
   const call = fetch.calls.find(c => c.url.includes('/ty/report-companies'));
-  assert.ok(call, '应通过 /ty/report-companies 取公司列表（要带 reportConfigList）');
+  assert.ok(call, '确认项目后应通过 /ty/report-companies 取公司列表（要带 reportConfigList）');
   assert.match(call.url, new RegExp('projectId=' + PROJECT_ID));
   assert.match(W.text(tree), new RegExp(COMPANY_NAME), '公司名应出现在页面上');
 });
@@ -341,7 +358,7 @@ test('公司没配置报告类型时：说清楚，不给可点的「重新生�
   ]);
   const { api, runtime } = loadClient(fetch.impl);
   const W = makeWalker(api);
-  mount(runtime, api.ReportComparePage, STORE_PROPS);
+  await driveToConfirmed(api, runtime, fetch, W);
   for (let i = 0; i < 8; i++) { await flush(); mount(runtime, api.ReportComparePage, STORE_PROPS); }
   const tree = mount(runtime, api.ReportComparePage, STORE_PROPS);
   const text = W.text(tree);
@@ -363,7 +380,7 @@ test('版本列表：显示线上已生成版本，并标明最新/旧版', asyn
   ]);
   const { api, runtime } = loadClient(fetch.impl);
   const W = makeWalker(api);
-  mount(runtime, api.ReportComparePage, STORE_PROPS);
+  await driveToConfirmed(api, runtime, fetch, W);
   for (let i = 0; i < 8; i++) { await flush(); mount(runtime, api.ReportComparePage, STORE_PROPS); }
   const tree = mount(runtime, api.ReportComparePage, STORE_PROPS);
 
@@ -519,6 +536,7 @@ test('比对结果没写回时会上报 dirty，写回后撤销（切页前的�
 
   fetch.set(defaultRoutes(compareResult()));
   let tree = mount(runtime, api.ReportComparePage, props);
+  await driveToConfirmed(api, runtime, fetch, W, props);
   for (let i = 0; i < 8; i++) { await flush(); mount(runtime, api.ReportComparePage, props); }
   tree = mount(runtime, api.ReportComparePage, props);
   assert.equal(seen.includes(true), false, '刚进页面不该是脏的');
@@ -555,7 +573,7 @@ test('宿主没回凭据时必须报错，不能假装能写回', async () => {
     { match: '/ty/report-compare-live', reply: { ok: true, result: compareResult() } },
   ]);
   const props = STORE_PROPS;
-  mount(runtime, api.ReportComparePage, props);
+  await driveToConfirmed(api, runtime, fetch, W, props);
   for (let i = 0; i < 8; i++) { await flush(); mount(runtime, api.ReportComparePage, props); }
   let tree = mount(runtime, api.ReportComparePage, props);
   W.nodes(tree, n => n.type === 'input' && n.props && n.props.type === 'file')[0]
@@ -567,4 +585,49 @@ test('宿主没回凭据时必须报错，不能假装能写回', async () => {
 
   assert.match(W.text(tree), /宿主没有返回比对凭据/);
   assert.equal(fetch.calls.some(c => c.url.includes('/ty/report-writeback')), false);
+});
+
+// ---------- 新版两段式：项目必须先确认，天源读取只在确认后发生 ----------
+test('两段式：选了项目但没点「确认项目」时，不发天源请求，页面提示先确认', async () => {
+  const fetch = makeFetch();
+  fetch.set(defaultRoutes(compareResult()));
+  const { api, runtime } = loadClient(fetch.impl);
+  const W = makeWalker(api);
+  mount(runtime, api.ReportComparePage, STORE_PROPS);
+  let tree = mount(runtime, api.ReportComparePage, STORE_PROPS);
+  const sel = W.nodes(tree, n => n.type === 'select')[0];
+  assert.ok(sel, '项目下拉应存在');
+  sel.props.onChange({ target: { value: PROJECT_ID } });
+  for (let i = 0; i < 4; i++) { await flush(); mount(runtime, api.ReportComparePage, STORE_PROPS); }
+  tree = mount(runtime, api.ReportComparePage, STORE_PROPS);
+
+  // 宿主自己的 store/state 刷新允许存在；关键是不能碰任何 /ty/ 天源读取。
+  assert.equal(fetch.calls.filter(c => c.url.includes('/ty/')).length, 0, '未确认前不应发出任何天源请求');
+  assert.match(W.text(tree), /先选择并确认项目/, '页面应提示先确认项目');
+  // 「开始比对」与文件选择必须不可用：天源数据还没读。
+  const file = W.nodes(tree, n => n.type === 'input' && n.props && n.props.type === 'file')[0];
+  assert.equal(file.props.disabled, true, '未确认项目前不能上传改稿');
+  // 没有「确认写回/写回线上」按钮（没有比对结果），但有确认按钮
+  W.button(tree, '确认项目');
+});
+
+test('两段式：确认后点「重新选择项目」会清空已读取的数据，回到未确认', async () => {
+  const fetch = makeFetch();
+  fetch.set(defaultRoutes(compareResult()));
+  const { api, runtime } = loadClient(fetch.impl);
+  const W = makeWalker(api);
+  const tree0 = await driveToConfirmed(api, runtime, fetch, W);
+  assert.match(W.text(tree0), /已确认/, '确认后应显示「已确认」标记');
+  assert.ok(fetch.calls.some(c => c.url.includes('/ty/report-companies')), '确认后应已读取公司列表');
+
+  const reset = W.button(tree0, '重新选择项目');
+  reset.props.onClick();
+  for (let i = 0; i < 4; i++) { await flush(); mount(runtime, api.ReportComparePage, STORE_PROPS); }
+  const tree = mount(runtime, api.ReportComparePage, STORE_PROPS);
+  const text = W.text(tree);
+  assert.match(text, /未确认/, '应回到未确认状态');
+  assert.doesNotMatch(text, new RegExp(COMPANY_NAME), '上一个项目的公司数据应被清空');
+  // 下拉回到空草稿
+  const sel = W.nodes(tree, n => n.type === 'select')[0];
+  assert.equal(sel.props.value, '', '项目下拉应回到未选状态');
 });
