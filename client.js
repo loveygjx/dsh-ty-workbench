@@ -8739,6 +8739,10 @@ window.__ModuleLoader__.load({
     // 这样用户的心智负担只剩一句话：把改过的稿子丢进来。
     function ReportComparePage({ s, toast, onDirtyChange }) {
       const cachedProjects = (s && s.work && s.work.ty && Array.isArray(s.work.ty.cachedProjects)) ? s.work.ty.cachedProjects : [];
+      // 两段式：pendingProject 只是下拉里的草稿；projectId 是「已确认」的项目。
+      // 天源的公司/版本读取只认 projectId —— 确认之前页面不发任何天源请求，
+      // 与「导出报告/说明」一致：先选项目，确认后再打开天源。
+      const [pendingProject, setPendingProject] = useState('');
       const [projectId, setProjectId] = useState('');
       const [companies, setCompanies] = useState(null);
       // 报告类型是否来自天源的真实配置。浏览器通道不可用时退回 MCP，
@@ -8792,12 +8796,9 @@ window.__ModuleLoader__.load({
         return data && data.data !== undefined ? data.data : (data && data.structuredContent);
       };
 
-      // 项目下拉的默认值：优先沿用上次选择，否则取缓存里的第一个。
-      useEffect(() => {
-        if (projectId) return;
-        const first = cachedProjects.find(p => p && /^\d+$/.test(String(p.id == null ? '' : p.id)));
-        if (first) setProjectId(String(first.id));
-      }, [cachedProjects, projectId]);
+      // 项目下拉只改草稿；不自动选任何项目。确认前页面保持第 1 步提示，
+      // 不发 /ty/report-companies 之类的天源请求。
+      // （与「导出报告/说明」一致：先选项目，点「确认」后才打开天源。）
 
       // 项目 → 公司列表。
       useEffect(() => {
@@ -8909,7 +8910,8 @@ window.__ModuleLoader__.load({
         return ids.size;
       }, [picked]);
 
-      const step = writeResult ? 4 : result ? 3 : (companyId && versions && versions.length) ? 2 : 1;
+      // 步骤条：第 1 步「选报告」在确认项目之前；确认项目进入第 2 步。
+      const step = writeResult ? 4 : result ? 3 : (companyId && versions && versions.length) ? 2 : projectId ? 2 : 1;
 
       // 比对结果只活在当前页签的组件状态里：切走就没了，宿主也不会替我们保留。
       // 所以「有结果、还没写回」这段窗口要让外层知道，切页前问一句，别让用户白比一场。
@@ -8924,7 +8926,19 @@ window.__ModuleLoader__.load({
         if (fileRef.current) fileRef.current.value = '';
         setFile(null);
       };
-      const pickProject = id => { if (id === projectId) return; setProjectId(id); };
+      const pickProject = id => {
+        // 下拉只改草稿；同值不动。确认前天源请求保持静默。
+        if (String(id) === String(pendingProject)) return;
+        setPendingProject(id);
+        if (String(id) === String(projectId)) return;
+        // 换草稿的同时作废旧项目的读取结果，避免界面残留上一个项目的数据。
+        if (projectId) setProjectId('');
+      };
+      // 「确认项目」：草稿 → 正式。真正触发天源公司/版本读取的是 projectId 本身。
+      const confirmProject = () => {
+        if (!/^\d+$/.test(String(pendingProject || ''))) return;
+        setProjectId(String(pendingProject));
+      };
       const pickCompany = id => { if (id === companyId) return; setCompanyId(id); };
       const pickType = id => { if (id === reportType) return; setReportType(id); };
       const pickVersion = id => {
@@ -9169,7 +9183,7 @@ window.__ModuleLoader__.load({
           '写回通道：' + String((locate.writeChannel && locate.writeChannel.endpoint) || 'POST /ty/api/report/config/item/content/save') +
           '；写前 acquire 该节点编辑锁，写后 release。')) : null;
 
-      const versionCards = !projectId ? null
+      const versionCards = !projectId ? h('div', { className: 'wb-hint' }, '先在左边选择并确认项目，确认后才会打开天源读取。')
         : !companyId ? h('div', { className: 'wb-hint' }, '先选公司和报告类型。')
         : versions === null ? h('div', { className: 'wb-hint' }, '正在读取线上版本…')
         : !versions.length ? h('div', { className: 'wb-hint' }, '这个公司还没有已生成的「' + typeName + '」。点上面的「重新生成」让天源出一版；如果线上明明有稿子，点「刷新」重读一次。')
@@ -9195,14 +9209,32 @@ window.__ModuleLoader__.load({
         h('div', null,
           h('span', { className: 'wb-label' }, '项目'),
           cachedProjects.length
-            ? h(Sel, { value: projectId, disabled: !!busy, onChange: e => pickProject(e.target.value), style: { width: '100%' } },
-              cachedProjects.filter(p => p && /^\d+$/.test(String(p.id == null ? '' : p.id))).map(p => h('option', { key: String(p.id), value: String(p.id) },
-                rcShort(p.projectName || p.projectCode || String(p.id), 24))))
+            ? h('div', null,
+              h(Sel, { value: pendingProject, disabled: !!busy, onChange: e => pickProject(e.target.value), style: { width: '100%' } },
+                h('option', { value: '' }, '— 选择项目 —'),
+                cachedProjects.filter(p => p && /^\d+$/.test(String(p.id == null ? '' : p.id))).map(p => h('option', { key: String(p.id), value: String(p.id) },
+                  rcShort(p.projectName || p.projectCode || String(p.id), 24)))),
+              // 确认按钮：与「导出报告/说明」同款两段式 —— 选定项目后点确认，
+              // 才去打开天源读取公司/版本。已确认后按钮变为「重新选择」。
+              h('div', { className: 'wb-row', style: { marginTop: 6, gap: 6 } },
+                projectId
+                  ? h(Btn, { className: 'sm', disabled: !!busy, onClick: () => {
+                    // 换项目：清掉已确认状态与全部读取结果，回到待确认。
+                    setProjectId(''); setPendingProject('');
+                    setCompanies(null); setCompanyId(''); setVersions(null); setAttachId('');
+                    setResult(null); setCompareToken(''); setWriteResult(null);
+                    setChecked(new Set()); setConfirming(false); setBaselineInfo(null); setError('');
+                    if (fileRef.current) fileRef.current.value = '';
+                    setFile(null);
+                  } }, '重新选择项目')
+                  : h(Btn, { className: 'sm', variant: pendingProject ? 'pri' : '', disabled: !!busy || !pendingProject, onClick: confirmProject, title: '确认后才会打开天源读取公司列表与线上版本' },
+                    '确认项目'),
+                projectId ? h('span', { className: 'wb-tag green' }, '已确认') : h('span', { className: 'wb-tag grey' }, '未确认')))
             : h('div', { className: 'wb-hint' }, '本地还没有项目缓存，请先到「工作」页签同步天源项目。')),
         h('div', null,
           h('span', { className: 'wb-label' }, '公司'),
           companies === null
-            ? h('div', { className: 'wb-hint' }, projectId ? '正在读取公司…' : '先选项目。')
+            ? h('div', { className: 'wb-hint' }, projectId ? '正在读取公司…' : '先选择并确认项目。')
             : !companies.length
               ? h('div', { className: 'wb-hint' }, '这个项目没有可用的被评估公司。')
               : h(Sel, { value: companyId, disabled: !!busy, onChange: e => pickCompany(e.target.value), style: { width: '100%' } },
@@ -9244,7 +9276,7 @@ window.__ModuleLoader__.load({
         baselineInfo ? h('div', { className: 'wb-hint', style: { marginTop: 6 } },
           '原版：' + (baselineInfo.companyName ? baselineInfo.companyName + ' · ' : '') + 'V' + String(baselineInfo.version || '?')
           + '（attachId ' + String(baselineInfo.attachId || '?') + '）') : null,
-        !companyId ? h('div', { className: 'wb-hint' }, '先在左边选公司和报告类型。') : null);
+        !companyId ? h('div', { className: 'wb-hint' }, '先在左边确认项目，再选公司和报告类型。') : null);
 
       const footBar = result ? h('div', { className: 'rc-foot' },
         h('span', { className: 'wb-hint' }, '共 ' + changes.length + ' 组差异'),
@@ -9266,7 +9298,7 @@ window.__ModuleLoader__.load({
 
       return h('div', null,
         h('p', { className: 'wb-hint', style: { marginTop: 0 } },
-          '把你在 Word 里线下改过的报告丢进来，系统自动取线上那一版当原版，比对出文字差异并定位到天源报告节点，再逐条写回——不用先在网页上重敲一遍，也不用事先导出。'),
+          '把你在 Word 里线下改过的报告丢进来，系统自动取线上那一版当原版，比对出文字差异并定位到天源报告节点，再逐条写回——不用先在网页上重敲一遍，也不用事先导出。与「导出报告/说明」一样，先选项目并确认，确认后才会打开天源读取。'),
         h('div', { className: 'rc-split' },
           sideBar,
           h('div', null,
