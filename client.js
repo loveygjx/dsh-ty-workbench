@@ -531,6 +531,39 @@ window.__ModuleLoader__.load({
       ".wb-link{color:var(--wb-accent);text-decoration:none}.wb-link:hover{text-decoration:underline}",
       ".wb-split{display:grid;grid-template-columns:1fr 1fr;gap:16px}",
       "@media(max-width:820px){.wb-split,.wb-form{grid-template-columns:1fr}}",
+      // ---- 报告比对 ----
+      ".rc-split{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px;align-items:start}",
+      "@media(max-width:980px){.rc-split{grid-template-columns:1fr}}",
+      ".rc-side{display:grid;gap:8px;position:sticky;top:8px}",
+      ".rc-base{padding:9px 10px;border:1px solid var(--dsw-alias-border-l1,#e3e6e8);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);cursor:pointer;transition:border-color .15s ease,background .15s ease}",
+      ".rc-base:hover{border-color:var(--wb-accent)}",
+      ".rc-base.on{border-color:var(--wb-accent);background:var(--wb-accent-soft)}",
+      ".rc-base-h{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px}",
+      ".rc-base-t{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,#1a1a1a);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".rc-base-m{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}",
+      ".rc-base-f{font-size:10.5px;color:var(--dsw-alias-label-secondary,#8a8f94);margin-top:4px;display:flex;justify-content:space-between;gap:6px}",
+      ".rc-steps{display:flex;align-items:center;gap:0;margin:2px 0 14px;flex-wrap:wrap}",
+      ".rc-step{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dsw-alias-label-secondary,#8a8f94);padding:5px 12px 5px 8px;border-radius:16px;white-space:nowrap}",
+      ".rc-step.on{background:var(--wb-accent-soft);color:var(--wb-accent);font-weight:600}",
+      ".rc-step.done{color:var(--wb-ok-ink,#1b8a5a)}",
+      ".rc-step-n{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;font-size:10px;background:var(--wb-chip-grey);color:var(--dsw-alias-label-secondary,#8a8f94);flex:0 0 auto}",
+      ".rc-step.on .rc-step-n{background:var(--wb-accent);color:#fff}",
+      ".rc-step.done .rc-step-n{background:var(--wb-ok-ink,#1b8a5a);color:#fff}",
+      ".rc-step-sep{width:14px;height:1px;background:var(--dsw-alias-border-l1,#dfe3e5);flex:0 0 auto}",
+      ".rc-del{color:var(--wb-danger-ink,#b63225);text-decoration:line-through;text-decoration-thickness:1px;opacity:.85}",
+      "body[data-ds-dark-theme] .rc-del{color:#ff9a8f}",
+      ".rc-add{color:var(--wb-ok-ink,#1b8a5a)}",
+      "body[data-ds-dark-theme] .rc-add{color:#5ee08c}",
+      ".rc-cell{max-width:360px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;font-size:11.5px}",
+      ".rc-dim{opacity:.5}",
+      ".rc-pos{font-family:Consolas,Menlo,monospace;font-size:10.5px;color:var(--dsw-alias-label-secondary,#6b7076);white-space:nowrap}",
+      ".rc-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;margin-top:12px;border:1px solid var(--dsw-alias-border-l1,#e3e6e8);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff)}",
+      ".rc-foot-sp{flex:1}",
+      ".rc-result{font-size:11px;line-height:1.7;padding:5px 8px;border-radius:5px;margin-top:4px;display:flex;gap:8px;align-items:baseline}",
+      ".rc-result.ok{background:var(--wb-ok-soft,#edf8f2);color:var(--wb-ok-ink,#1b8a5a)}",
+      ".rc-result.skip{background:var(--wb-warn-soft,#fff2e0);color:var(--wb-warn-ink,#a35b00)}",
+      ".rc-result.fail{background:var(--wb-danger-soft,#fdecea);color:var(--wb-danger-ink,#b63225)}",
+      ".rc-result .id{font-family:Consolas,Menlo,monospace;font-size:10.5px;white-space:nowrap}",
   ].join('\n');
 
     // ---------- 报备表单样式（本地项目 / 新建项目） ----------
@@ -603,6 +636,11 @@ window.__ModuleLoader__.load({
       ".pf-hint{color:var(--dsw-alias-label-secondary,#888);font-size:12px}",
       ".pf-foot-hint{margin:14px 0 2px;padding:8px 10px;border:1px dashed var(--dsw-alias-border-l1,#d8dcde);border-radius:4px;font-size:12px;color:var(--dsw-alias-label-secondary,#666)}",
       ".pf-foot-hint code{margin-left:4px;padding:1px 6px;border-radius:3px;background:rgba(47,127,240,.1);color:#2f7ff0;font-family:Consolas,monospace}",
+      ".pf-folder{display:flex;gap:6px;align-items:center}",
+      ".pf-folder .pf-in{flex:1;min-width:0;font-family:Consolas,monospace;font-size:12px}",
+      ".pf-folder-acts{display:flex;flex-wrap:wrap;gap:6px;align-items:center}",
+      ".pf-folder-chip{display:inline-flex;align-items:center;gap:4px;margin-right:6px;font-size:12px;padding:1px 8px;border-radius:10px;background:rgba(30,126,52,.12);color:#1e7e34;white-space:nowrap}",
+      "body[data-ds-dark-theme] .pf-folder-chip{background:rgba(76,175,110,.18);color:#8fd6a5}",
       ".pf-info{display:inline-block;margin-left:4px;color:#2f7ff0;font-size:12px;cursor:help;font-weight:400}",
       ".pf-list{padding:14px 16px}",
       ".pf-list-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}",
@@ -615,6 +653,8 @@ window.__ModuleLoader__.load({
       ".pf-grid tr:hover td{background:rgba(47,127,240,.03)}",
       ".pf-name{font-weight:600;color:#2f7ff0;cursor:pointer;word-break:break-all}",
       ".pf-name:hover{text-decoration:underline}",
+      ".pf-name.muted{color:var(--dsw-alias-label-secondary,#888);cursor:pointer}",
+      ".pf-name.muted:hover{text-decoration:none;color:#b45309}",
       ".pf-sub{font-size:11.5px;color:var(--dsw-alias-label-secondary,#888);margin-top:2px}",
       ".pf-mono{font-family:Consolas,monospace;font-size:12px}",
       ".pf-empty{padding:34px;text-align:center;color:var(--dsw-alias-label-secondary,#888);font-size:13px}",
@@ -818,6 +858,39 @@ window.__ModuleLoader__.load({
     // 避免升级后原来项目的文件夹突然「找不到」。
     function legacyFolderName(p) { return projectYear(p) + ' ' + cleanSegment(p && (p.name || p.shortName)); }
 
+    // 绑定的本地文件夹绝对路径（没绑定就是空串）。
+    // 有它的时候，所有「打开/写入/归档」都直接落到这个目录，不再按名字去项目根目录里找。
+    function projectAbs(p) { return String((p && p.folderPath) || '').trim(); }
+    // 界面上的文件夹标识：绑定了就显示绝对路径，没绑定显示自动生成的名字
+    function projectFolderLabel(p) { return projectAbs(p) || folderNameOf(p); }
+
+    // 目录选择器返回值统一成字符串路径：宿主不同版本可能给字符串，也可能给 {path}/{dir}。
+    function dirOfPicked(v) {
+      if (!v) return '';
+      if (typeof v === 'string') return v.trim();
+      const p2 = v.path || v.dir || v.directory || v.absolutePath || '';
+      return String(p2 || '').trim();
+    }
+    async function pickDirectoryPath() {
+      if (!workspacePicker) throw new Error('这个环境没有目录选择器，请手动粘贴绝对路径');
+      const picked = await workspacePicker.pickDirectory();
+      return dirOfPicked(picked);
+    }
+
+    // 选一个已存在的本地文件夹并绑定：先弹系统选目录，再探测一下里面有什么（避免绑错）。
+    // 返回 { path, dirs, files } 或 null（用户取消）。失败抛错让调用方 toast。
+    async function pickFolderToBind() {
+      const picked = await pickDirectoryPath();
+      if (!picked) return null;
+      const r = await fetch(PREFIX + '/project/folder/probe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: picked }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!d.ok) throw new Error(d.error || '这个路径不可用：' + picked);
+      return { path: d.path, dirs: d.dirs, files: d.files, name: d.name };
+    }
+
     // 报告文号：资产评估业务「天源评报字〔年〕第4位」，评估咨询业务「天源咨报字〔年〕第5位」
     function nextReportNo(projects, kind) {
       const consult = kind === '咨询';
@@ -884,6 +957,10 @@ window.__ModuleLoader__.load({
         contract: { type: '', signDate: '', serviceStart: '', serviceEnd: '', currency: '人民币', amountOriginal: '', amount: '', payMethod: '', reportSubmitAt: '', reportSubmitWay: '特快专递', reportCopies: '4', statementCopies: '4', otherUsers: DEFAULT_REPORT_USERS, purposeDetail: '', attachment: '', attachmentPath: '', markdownPath: '', secret: '' },
         tyId: '',
         tyUrl: TY_BASE,
+        // 绑定的本地文件夹（绝对路径）。空 = 没绑定，按「项目根 + 编号 简称」自动找/建；
+        // 非空 = 强关联到用户指定的那个目录（可以放在项目根之外，比如 OneDrive 的客户目录）。
+        folderPath: '',
+        folderBoundAt: '',
         note: '',
       };
     }
@@ -1301,15 +1378,108 @@ window.__ModuleLoader__.load({
       };
       const memberBox = tagBox('team.members', '输入姓名后回车', MEMBER_PRESETS);
 
+      // ---- 本地文件夹绑定 ----
+      // 绑一个具体目录给项目（folderPath 落库）。绑了之后：打开文件夹 / 上传合同 / 归档
+      // 都只认这个目录，不再按「编号 简称」去项目根里找 —— 项目就能放在 OneDrive、
+      // 客户共享盘等任意位置；不绑定则维持原来的自动命名 + 项目根目录。
+      const [bindBusy, setBindBusy] = useState('');
+      const boundAbs = String(f.folderPath || '').trim();
+
+      // 选一个已存在的目录直接绑上（不改里面任何东西）
+      const bindPickExisting = async () => {
+        setBindBusy('pick');
+        try {
+          const got = await pickFolderToBind();
+          if (!got) return;
+          setF(prev => ({ ...prev, folderPath: got.path, folderBoundAt: new Date().toISOString() }));
+          toast('已绑定：' + got.path + '（' + got.dirs + ' 个子目录 / ' + got.files + ' 个文件）', 'ok');
+        } catch (e) { toast(String((e && e.message) || e), 'danger'); }
+        finally { setBindBusy(''); }
+      };
+
+      // 选一个上级目录，在里面按「编号 简称」新建一个项目文件夹并绑定
+      const bindCreateIn = async () => {
+        setBindBusy('new');
+        try {
+          const parent = await pickDirectoryPath();
+          if (!parent) return;
+          const cur = fRef.current;
+          const r = await fetch(PREFIX + '/project/folder/new', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              parent,
+              year: cur.year || projectYear(cur),
+              code: cleanSegment(cur.code),
+              shortName: cleanSegment(cur.shortName || cur.name),
+            }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          setF(prev => ({ ...prev, folderPath: d.path, folderBoundAt: new Date().toISOString() }));
+          toast((d.created ? '已新建并绑定：' : '该目录已存在，已绑定：') + d.path, 'ok');
+        } catch (e) { toast('新建文件夹失败：' + String((e && e.message) || e), 'danger'); }
+        finally { setBindBusy(''); }
+      };
+
+      // 手动粘的路径：失焦时核对一下（不存在就建出来，避免绑了个空路径）
+      const bindManual = async () => {
+        const v = String(fRef.current.folderPath || '').trim();
+        if (!v) return;
+        setBindBusy('manual');
+        try {
+          const r = await fetch(PREFIX + '/project/folder', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder: folderNameOf(fRef.current), abs: v, create: true, open: false }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          setF(prev => ({ ...prev, folderPath: d.path, folderBoundAt: new Date().toISOString() }));
+          toast('已绑定本地文件夹：' + d.path, 'ok');
+        } catch (e) { toast('绑定失败：' + String((e && e.message) || e), 'danger'); }
+        finally { setBindBusy(''); }
+      };
+
+      const openProjectFolderNow = async () => {
+        try {
+          const r = await fetch(PREFIX + '/project/folder', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder: folderNameOf(fRef.current), abs: projectAbs(fRef.current), create: true, open: true }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+        } catch (e) { toast('打开失败：' + String((e && e.message) || e), 'danger'); }
+      };
+
+      const folderRows = [
+        [L('本地文件夹', 1, '绑一个具体目录给这个项目：打开文件夹、上传合同、归档都只认它。不填则自动用「项目根目录\\编号 简称」'),
+        V(h('div', { className: 'pf-folder' },
+          h('input', {
+            className: 'pf-in',
+            value: boundAbs,
+            placeholder: '未绑定 · 自动使用「00项目ing\\' + folderNameOf(f) + '」',
+            onChange: e => setF(prev => ({ ...prev, folderPath: e.target.value })),
+            onBlur: () => bindManual(),
+          })), 3)],
+        [L(''), V(h('div', { className: 'pf-folder-acts' },
+          h('button', { type: 'button', className: 'pf-btn', disabled: !!bindBusy, title: '从磁盘上挑一个已有的文件夹，把当前项目嵌进去（不改动里面的文件）', onClick: bindPickExisting },
+            bindBusy === 'pick' ? '选择中…' : '选择已有文件夹'),
+          h('button', { type: 'button', className: 'pf-btn', disabled: !!bindBusy, title: '先挑一个上级目录，再在里面按「编号 简称」新建项目文件夹', onClick: bindCreateIn },
+            bindBusy === 'new' ? '创建中…' : '新建文件夹…'),
+          h('button', { type: 'button', className: 'pf-btn', disabled: !!bindBusy, title: '在系统文件管理器里打开（未绑定就是自动生成的那个目录）', onClick: openProjectFolderNow }, '打开文件夹'),
+          boundAbs ? h('button', { type: 'button', className: 'pf-btn danger', disabled: !!bindBusy, title: '只解除关联，磁盘上的文件一个都不动', onClick: () => setF(prev => ({ ...prev, folderPath: '', folderBoundAt: '' })) }, '解除绑定') : null,
+          boundAbs ? h('span', { className: 'pf-hint' }, '已绑定到自定义目录') : h('span', { className: 'pf-hint' }, '未绑定 · 保存时自动创建：' + folderNameOf(f))), 3)],
+      ];
+
       // 打开「合同信息」时先看看文件夹里已经有什么：有合同就自动带出来，有 md 就自动认出来
       const detectContractFiles = async () => {
         const folder = folderNameOf(fRef.current);
-        if (!cleanSegment(fRef.current.code) || !cleanSegment(fRef.current.shortName || fRef.current.name)) return;
+        const abs = projectAbs(fRef.current);
+        if (!abs && (!cleanSegment(fRef.current.code) || !cleanSegment(fRef.current.shortName || fRef.current.name))) return;
         try {
           const r = await fetch(PREFIX + '/project/contract-files', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder, sub: CONTRACT_SCAN_SUB }),
+            body: JSON.stringify({ folder, abs, sub: CONTRACT_SCAN_SUB }),
           });
           if (!r.ok) return;
           const d = await r.json().catch(() => ({}));
@@ -1431,8 +1601,9 @@ window.__ModuleLoader__.load({
       // 「添加」：只把文件存到 <项目文件夹>\02现场资料\业务委托合同\，不解析
       const uploadContractFile = async (file) => {
         const folder = folderNameOf(f);
-        // 落位目录是「编号 简称」，两样缺一个就会存到对不上的目录里
-        if (!cleanSegment(f.code) || !cleanSegment(f.shortName || f.name)) {
+        const abs = projectAbs(fRef.current);
+        // 落位目录是「编号 简称」，两样缺一个就会存到对不上的目录里；已绑定目录的除外
+        if (!abs && (!cleanSegment(f.code) || !cleanSegment(f.shortName || f.name))) {
           toast('请先填写项目编号和项目简称，合同文件要放进「编号 简称」文件夹', 'danger');
           setTab('basic');
           return;
@@ -1440,6 +1611,7 @@ window.__ModuleLoader__.load({
         setUploading(true);
         try {
           const r = await fetch(PREFIX + '/project/upload?folder=' + encodeURIComponent(folder)
+            + (abs ? '&abs=' + encodeURIComponent(abs) : '')
             + '&sub=' + encodeURIComponent(CONTRACT_SCAN_SUB)
             + '&name=' + encodeURIComponent(file.name), {
             method: 'POST',
@@ -1466,9 +1638,10 @@ window.__ModuleLoader__.load({
       // 「转换为 md」：把已添加的 word/pdf 转成同目录同名 .md（已有且不比原文件旧就直接复用）
       const clickConvert = async () => {
         const folder = folderNameOf(f);
+        const abs = projectAbs(fRef.current);
         const name = String(f.contract.attachment || '').trim();
         if (!name) { toast('先点「添加」选一份合同文件', 'warn'); return; }
-        if (!cleanSegment(f.code) || !cleanSegment(f.shortName || f.name)) {
+        if (!abs && (!cleanSegment(f.code) || !cleanSegment(f.shortName || f.name))) {
           toast('请先填写项目编号和项目简称', 'danger');
           setTab('basic');
           return;
@@ -1478,7 +1651,7 @@ window.__ModuleLoader__.load({
           const r = await fetch(PREFIX + '/project/parse', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder, sub: CONTRACT_SCAN_SUB, name, mode: 'md' }),
+            body: JSON.stringify({ folder, abs, sub: CONTRACT_SCAN_SUB, name, mode: 'md' }),
           });
           if (r.status === 404) { toast('宿主插件还是旧版本：重启 DSH 后可用', 'warn'); return; }
           const d = await r.json().catch(() => ({}));
@@ -1493,9 +1666,10 @@ window.__ModuleLoader__.load({
       // 「填写信息」：读 markdown 交给大模型，按结果填表
       const clickFill = async () => {
         const folder = folderNameOf(f);
+        const abs = projectAbs(fRef.current);
         const name = String(f.contract.attachment || '').trim();
         if (!name) { toast('先点「添加」选一份合同文件', 'warn'); return; }
-        if (!cleanSegment(f.code) || !cleanSegment(f.shortName || f.name)) {
+        if (!abs && (!cleanSegment(f.code) || !cleanSegment(f.shortName || f.name))) {
           toast('请先填写项目编号和项目简称', 'danger');
           setTab('basic');
           return;
@@ -1506,7 +1680,7 @@ window.__ModuleLoader__.load({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              folder, sub: CONTRACT_SCAN_SUB, name, mode: 'fill',
+              folder, abs, sub: CONTRACT_SCAN_SUB, name, mode: 'fill',
               provider: chosenModel ? chosenModel.provider : '',
               model: chosenModel ? chosenModel.model : '',
             }),
@@ -1598,6 +1772,7 @@ window.__ModuleLoader__.load({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             folder: folderNameOf(rec), legacy: legacyFolderName(rec),
+            abs: projectAbs(rec),
             year: rec.year, name: rec.shortName, create: true, open: false,
           }),
         }).catch(() => {});
@@ -2113,8 +2288,10 @@ window.__ModuleLoader__.load({
         h('div', { className: 'pf-body' },
           tab === 'basic' ? h('div', null,
             h(PfSection, { title: '项目基础信息' }, h(PfTable, { rows: basicRows })),
+            h(PfSection, { title: '本地文件夹' }, h(PfTable, { rows: folderRows })),
             h(PfSection, { title: '成员信息' }, h(PfTable, { rows: memberRows })),
-            h('div', { className: 'pf-foot-hint' }, '保存后将在「00项目ing」下创建项目文件夹：', h('code', null, folderNameOf(f)))) : null,
+            h('div', { className: 'pf-foot-hint' },
+              boundAbs ? '已绑定本地文件夹：' : '保存后将在「00项目ing」下创建项目文件夹：', h('code', null, boundAbs || folderNameOf(f)))) : null,
           tab === 'client' ? h('div', null,
             customers.map((c, i) => h(PfSection, {
               key: 'cust-' + i,
@@ -2358,7 +2535,7 @@ window.__ModuleLoader__.load({
     async function buildProjectFolders(project, s, toast, quiet) {
       const p = normalizeProject(project || {});
       const folder = folderNameOf(p);
-      if (!folder) return { ok: false, error: '项目还没填项目编号 / 项目简称' };
+      if (!folder && !projectAbs(p)) return { ok: false, error: '项目还没填项目编号 / 项目简称' };
       const list = eqListOf(s, p.id);
       const rows = eqRows(list.length ? list : eqSeed(p));
       // 新建项目时被评估单位还没填，种子行叫「被评估单位」——这种占位名不建 02基础类，
@@ -2377,10 +2554,11 @@ window.__ModuleLoader__.load({
     async function buildProjectFoldersFrom(project, companies, toast, quiet) {
       const p = normalizeProject(project || {});
       const folder = folderNameOf(p);
-      if (!folder) return { ok: false, error: '项目还没填项目编号 / 项目简称' };
+      const abs = projectAbs(p);
+      if (!folder && !abs) return { ok: false, error: '项目还没填项目编号 / 项目简称' };
       const r = await fetch(PREFIX + '/project/folders/build', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: folder, companies: companies }),
+        body: JSON.stringify({ folder: folder, abs: abs, companies: companies }),
       });
       if (r.status === 404) throw new Error('宿主未重载，重启 DSH 后可用');
       const d = await r.json().catch(() => ({}));
@@ -2955,7 +3133,7 @@ window.__ModuleLoader__.load({
     function FilesPanel({ project, toast, openSub }) {
       const subs = [['02现场资料/业务委托合同', '业务委托合同'], ['02现场资料/企业提供资料/00财务资料', '财务资料（按公司）'], ['02现场资料/企业提供资料/02基础类', '基础类资料（按公司）'], [MGMT_FOLDER, '管理类底稿'], ['03评估申报', '评估申报与核实资料'], ['05报告', '报告与明细表']];
       return h('div', null,
-        h('p', { className: 'pf-hint' }, '项目文件都在「' + folderNameOf(project) + '」下按阶段分目录存放，点下面的按钮直接打开对应目录。'),
+        h('p', { className: 'pf-hint' }, '项目文件都在「' + projectFolderLabel(project) + '」下按阶段分目录存放，点下面的按钮直接打开对应目录。'),
         h('div', { className: 'pw-acts' },
           h('button', { type: 'button', className: 'pf-btn pri', onClick: () => openSub('') }, '打开项目根目录'),
           subs.map(([p2, t]) => h('button', { key: p2, type: 'button', className: 'pf-btn', onClick: () => openSub(p2) }, t))));
@@ -3004,13 +3182,14 @@ window.__ModuleLoader__.load({
               h('td', null, h('button', { type: 'button', className: 'pf-btn sm', onClick: () => openSub(tplDir) }, '打开文件夹'))))))));
     }
 
-    function ProjectWorkspace({ project: rawProject, s, toast, onBack }) {
+    function ProjectWorkspace({ project: rawProject, s, toast, onBack, onBind }) {
       const project = useMemo(() => normalizeProject(rawProject || {}), [rawProject && rawProject.id, rawProject && rawProject.updatedAt]);
       const [tab, setTab] = useState('work');
       const [sub, setSub] = useState('equity');
       // co={id,kind}：从股权信息某一行点「财务资料 / 基础类资料」进来的单家公司视图
       const [co, setCo] = useState(null);
       const folder = folderNameOf(project);
+      const abs = projectAbs(project);
 
       const openSub = async path => {
         try {
@@ -3029,7 +3208,7 @@ window.__ModuleLoader__.load({
           if (project.stage === '归档/收款') throw new Error('该项目已归档，归档路径未记录，请在「文件库」里查找');
           const r = await fetch(PREFIX + '/project/folder', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder: folder, sub: parts, create: true }),
+            body: JSON.stringify({ folder: folder, abs: abs, sub: parts, create: true }),
           });
           const d = await r.json().catch(() => ({}));
           if (!r.ok || !d.ok) throw new Error((d && d.error) || ('HTTP ' + r.status));
@@ -3046,6 +3225,10 @@ window.__ModuleLoader__.load({
             h('div', { className: 'pw-title' }, h('b', null, project.code || '未编号'), h('span', null, ' | '), h('span', null, project.name || '未命名项目'))),
           h('div', { className: 'pw-head-r' },
             h('span', { className: 'pf-hint' }, '基准日 ' + (project.baseDate || '—') + ' · 项目经理 ' + (managerText(project.team) || '—') + ' · ' + (project.stage || '进行中')),
+            // 目录标识：绑定了就亮出绝对路径，一眼看出它不是项目根下的自动目录
+            h('span', { className: 'pf-hint', title: abs ? '已绑定本地文件夹' : '自动生成的目录（项目根下）' },
+              abs ? h('span', { className: 'pf-folder-chip' }, '📁 ' + abs) : '📁 ' + folder),
+            onBind ? h('button', { type: 'button', className: 'pf-btn sm', title: '把这个项目和磁盘上某个文件夹绑定（或改绑、解绑）', onClick: () => onBind(project) }, abs ? '改绑定' : '绑定文件夹') : null,
             h('button', { type: 'button', className: 'pf-btn sm', onClick: () => openSub('') }, '打开项目文件夹'))),
         h('div', { className: 'pw-tabs' }, PW_TABS.map(([k, t]) => h('button', { key: k, type: 'button', className: 'pw-tab ' + (tab === k ? 'on' : ''), onClick: () => setTab(k) }, t))),
         h('div', { className: 'pw-body' },
@@ -3139,7 +3322,7 @@ window.__ModuleLoader__.load({
       const busyRef = useRef(false);
       const p = project || {};
       const bodyOf = () => JSON.stringify({
-        folder: folderNameOf(p), legacy: legacyFolderName(p),
+        folder: folderNameOf(p), legacy: legacyFolderName(p), abs: projectAbs(p),
         code: p.code, shortName: p.shortName || p.name, name: p.name, year: projectYear(p),
       });
       useEffect(() => {
@@ -3215,7 +3398,98 @@ window.__ModuleLoader__.load({
           h(Btn, { variant: 'pri', className: 'sm', onClick: confirm, disabled: busy || pre.targetExists }, busy ? '归档中…' : '确认归档')) : null);
     }
 
-    function Projects({ s, toast, go }) {
+    // 绑定本地文件夹的小弹窗：选择已有 / 新建 / 手填路径 / 解除绑定。
+    // 只改 project.folderPath（一个绝对路径字段），磁盘上已有的东西一律不动。
+    function BindFolderDialog({ project, onClose, onSave, toast }) {
+      const p = project || {};
+      const [path, setPath] = useState(projectAbs(p));
+      const [busy, setBusy] = useState('');
+      const [info, setInfo] = useState(null);   // 探测结果 {dirs,files,sample}
+      const probe = async v => {
+        if (!String(v || '').trim()) { setInfo(null); return; }
+        try {
+          const r = await fetch(PREFIX + '/project/folder/probe', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: v }),
+          });
+          const d = await r.json().catch(() => ({}));
+          setInfo(d && d.ok ? d : { error: (d && d.error) || '路径不可用' });
+        } catch (e) { setInfo({ error: String((e && e.message) || e) }); }
+      };
+      const pickExisting = async () => {
+        setBusy('pick');
+        try {
+          const got = await pickFolderToBind();
+          if (!got) return;
+          setPath(got.path);
+          setInfo(got);
+        } catch (e) { toast(String((e && e.message) || e), 'danger'); }
+        finally { setBusy(''); }
+      };
+      const createIn = async () => {
+        setBusy('new');
+        try {
+          const parent = await pickDirectoryPath();
+          if (!parent) return;
+          const r = await fetch(PREFIX + '/project/folder/new', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parent, year: projectYear(p), code: cleanSegment(p.code), shortName: cleanSegment(p.shortName || p.name) }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+          setPath(d.path);
+          probe(d.path);
+          toast((d.created ? '已新建：' : '已存在，直接绑定：') + d.path, 'info');
+        } catch (e) { toast('新建失败：' + String((e && e.message) || e), 'danger'); }
+        finally { setBusy(''); }
+      };
+      const ok = async () => {
+        const v = String(path || '').trim();
+        setBusy('save');
+        try {
+          if (v) {
+            // 走一次 /project/folder（create=true）：顺手把目录建出来，避免绑一个不存在的路径
+            const r = await fetch(PREFIX + '/project/folder', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ folder: folderNameOf(p), abs: v, legacy: legacyFolderName(p), create: true, open: false }),
+            });
+            if (r.status === 404) throw new Error('宿主未重载：重启 DSH 后可用');
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+            onSave({ folderPath: d.path, folderBoundAt: new Date().toISOString() });
+          } else {
+            onSave({ folderPath: '', folderBoundAt: '' });   // 清空 = 解除绑定，回到自动命名
+          }
+          onClose();
+        } catch (e) { toast('绑定失败：' + String((e && e.message) || e), 'danger'); }
+        finally { setBusy(''); }
+      };
+      const cur = projectAbs(p);
+      return h(Modal, { title: '本地文件夹 · ' + (p.name || '未命名项目'), onClose, style: { maxWidth: 720 } },
+        h('p', { className: 'pf-hint', style: { margin: '0 0 10px' } },
+          '绑定后，这个项目的「打开文件夹 / 合同扫描件 / 底稿目录 / 归档」都只认你指定的这个目录，可以放在 OneDrive、客户共享盘等任意位置。不绑定时自动用「项目根目录\\' + folderNameOf(p) + '」。'),
+        h('div', { className: 'pf-folder' },
+          h('input', {
+            className: 'pf-in', value: path, placeholder: '绝对路径，例如 ' + folderNameOf(p),
+            onChange: e => setPath(e.target.value), onBlur: () => probe(path),
+          })),
+        h('div', { className: 'pf-folder-acts', style: { marginTop: 8 } },
+          h('button', { type: 'button', className: 'pf-btn', disabled: !!busy, onClick: pickExisting }, busy === 'pick' ? '选择中…' : '选择已有文件夹'),
+          h('button', { type: 'button', className: 'pf-btn', disabled: !!busy, onClick: createIn }, busy === 'new' ? '创建中…' : '新建文件夹…'),
+          cur ? h('button', { type: 'button', className: 'pf-btn danger', disabled: !!busy, onClick: () => { setPath(''); setInfo(null); } }, '清空（解除绑定）') : null),
+        info
+          ? (info.error
+            ? h('div', { className: 'pf-err', style: { marginTop: 8 } }, info.error)
+            : h('div', { style: { marginTop: 8, fontSize: 12 } },
+              h('span', { className: 'pf-folder-chip' }, '目录可用'),
+              h('span', { className: 'pf-hint', style: { marginLeft: 8 } }, (info.dirs || 0) + ' 个子目录 · ' + (info.files || 0) + ' 个文件'
+                + (info.sample && info.sample.length ? ' · ' + info.sample.slice(0, 4).join('、') : ''))))
+          : null,
+        h('div', { className: 'wb-row', style: { justifyContent: 'flex-end', marginTop: 14, gap: 8 } },
+          h('button', { type: 'button', className: 'pf-btn', onClick: onClose }, '取消'),
+          h('button', { type: 'button', className: 'pf-btn pri', disabled: !!busy, onClick: ok }, busy === 'save' ? '绑定中…' : '确定绑定')));
+    }
+
+    function Projects({ s, toast, go, openId: openIdProp, setOpenId: setOpenIdProp }) {
       const [editing, setEditing] = useState(null);
       const [delTarget, setDelTarget] = useState(null);   // 待删除的项目（弹窗问要不要连文件夹一起删）
       const [archTarget, setArchTarget] = useState(null); // 待归档的项目（弹窗预览 04项目归档 后确认）
@@ -3224,10 +3498,16 @@ window.__ModuleLoader__.load({
       const [fb, setFb] = useState('');
       const [fr, setFr] = useState('');
       const [busy, setBusy] = useState('');
-      const [openId, setOpenId] = useState('');   // 打开哪个项目进「项目界面」
+      // 打开哪个项目进「项目界面」：优先用 Work 传下来的（天源项目页也能直接跳进来），
+      // 没传就退化成组件内自有状态，单独渲染时照样能用。
+      const [openIdLocal, setOpenIdLocal] = useState('');
+      const openId = openIdProp !== undefined ? openIdProp : openIdLocal;
+      const setOpenId = setOpenIdProp || setOpenIdLocal;
+      const [bindTarget, setBindTarget] = useState(null); // 正在绑定本地文件夹的项目
 
       const all = useMemo(() => (s.work.projects || []).map(normalizeProject), [s.work.projects]);
       const years = useMemo(() => [...new Set(all.map(p => projectYear(p)))].sort().reverse(), [all]);
+      const boundCount = useMemo(() => all.filter(p => projectAbs(p)).length, [all]);
 
       // 企业库自举：库里还没有东西时，用已存项目的「委托人 / 被评估单位」把它填起来
       useEffect(() => {
@@ -3259,7 +3539,7 @@ window.__ModuleLoader__.load({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              folder: folderNameOf(p), legacy: legacyFolderName(p),
+              folder: folderNameOf(p), legacy: legacyFolderName(p), abs: projectAbs(p),
               year: projectYear(p), name: p.shortName || p.name, create: true,
             }),
           });
@@ -3288,6 +3568,8 @@ window.__ModuleLoader__.load({
             archiveDate: x.archiveDate || todayStr(),
             archivedAt: new Date().toISOString(),
             archivePath: d.to,
+            // 目录整个搬进归档库了：原来的绑定路径已经失效，清掉，之后一律走 archivePath
+            folderPath: '',
           } : x)),
         }));
       };
@@ -3333,7 +3615,7 @@ window.__ModuleLoader__.load({
         fetch(PREFIX + '/project/folder', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ folder: folderNameOf(p), legacy: legacyFolderName(p), remove: true }),
+          body: JSON.stringify({ folder: folderNameOf(p), legacy: legacyFolderName(p), abs: projectAbs(p), remove: true }),
         }).then(r => r.json().catch(() => ({})))
           .then(d => {
             if (d && d.ok) toast(d.removed ? '项目与文件夹都已删除' : '已删除项目（文件夹本来就不存在）', 'warn');
@@ -3342,9 +3624,27 @@ window.__ModuleLoader__.load({
           .catch(() => toast('项目已删除，但文件夹没删掉（宿主不可用）', 'warn'));
       };
 
+      // 绑定弹窗在「列表」和「项目界面」两处都要能弹出来（项目界面头栏也有「绑定文件夹」），
+      // 所以抽成一个变量，两处各挂一份。
+      const bindDialog = bindTarget ? h(BindFolderDialog, {
+        project: bindTarget,
+        toast,
+        onClose: () => setBindTarget(null),
+        onSave: upd => {
+          patch('work', w => ({ ...w, projects: w.projects.map(x => (x.id === bindTarget.id ? { ...x, ...upd, updatedAt: new Date().toISOString() } : x)) }));
+          toast(upd.folderPath ? '已绑定本地文件夹：' + upd.folderPath : '已解除绑定，回到自动命名目录', 'ok');
+        },
+      }) : null;
+
       if (openId) {
         const cur = all.find(x => x.id === openId);
-        if (cur) return h(ProjectWorkspace, { project: cur, s: s, toast: toast, onBack: () => setOpenId('') });
+        if (cur) return h('div', null,
+          h(ProjectWorkspace, {
+            project: cur, s: s, toast: toast,
+            onBack: () => setOpenId(''),
+            onBind: p2 => setBindTarget(p2),
+          }),
+          bindDialog);
       }
 
       if (editing) {
@@ -3377,7 +3677,9 @@ window.__ModuleLoader__.load({
         h('div', { className: 'pf-list-h' },
           h('div', { className: 'pf-list-t' },
             h('h2', null, '本地项目'),
-            h('span', { className: 'pf-hint' }, '共 ' + all.length + ' 个项目 · 点项目名称进入项目界面；「文件夹」打开本地目录，「归档」预览 04项目归档 后移入已归档库')),
+            h('span', { className: 'pf-hint' }, '共 ' + all.length + ' 个项目'
+              + (boundCount ? '（已绑定本地文件夹 ' + boundCount + ' 个）' : '')
+              + ' · 点项目名称进入项目界面；「绑定」可把项目关联到任意已有目录，「文件夹」打开本地目录，「归档」预览 04项目归档 后移入已归档库')),
           h('div', { className: 'wb-row' },
             h('button', { type: 'button', className: 'pf-btn', onClick: async () => {
               try {
@@ -3418,7 +3720,9 @@ window.__ModuleLoader__.load({
               h('td', null,
                 h('div', { className: 'pf-name', title: '进入项目界面（作业信息 / 股权信息）', onClick: () => setOpenId(p.id) }, p.name || '未命名项目'),
                 // 项目名称即项目简称：两者相同时副标题只留编号，不再把名字重复一遍
-                h('div', { className: 'pf-sub' }, p.code + (p.shortName && p.shortName !== p.name ? ' · ' + p.shortName : ''))),
+                h('div', { className: 'pf-sub' }, p.code + (p.shortName && p.shortName !== p.name ? ' · ' + p.shortName : '')),
+                // 绑定了自定义文件夹的项目，直接把路径亮出来（一眼看出它不在项目根里）
+                projectAbs(p) ? h('div', { className: 'pf-sub', title: '已绑定的本地文件夹' }, h('span', { className: 'pf-folder-chip' }, '📁 ' + projectAbs(p))) : null),
               h('td', null, h('span', { className: 'wb-tag grey' }, p.bizType || '—')),
               h('td', null, riskTag(p.risk)),
               h('td', null, p.baseDate || '—'),
@@ -3427,6 +3731,8 @@ window.__ModuleLoader__.load({
               h('td', null, projectStatusTag(p), h('div', { className: 'pf-sub' }, hoursOf(p.id).toFixed(1) + ' h')),
               h('td', null, h('div', { className: 'wb-row' },
                 h('button', { type: 'button', className: 'pf-btn sm', onClick: () => setEditing(p) }, '编辑'),
+                h('button', { type: 'button', className: 'pf-btn sm', title: projectAbs(p) ? '当前绑定：' + projectAbs(p) : '绑定一个已有的本地文件夹到该项目', onClick: () => setBindTarget(p) },
+                  projectAbs(p) ? '已绑定' : '绑定'),
                 h('button', { type: 'button', className: 'pf-btn sm', onClick: () => openFolder(p) }, '文件夹'),
                 h('button', {
                   type: 'button', className: 'pf-btn sm',
@@ -3435,7 +3741,8 @@ window.__ModuleLoader__.load({
                   onClick: () => setArchTarget(p),
                 }, p.stage === '归档/收款' ? '已归档' : '归档'),
                 h('button', { type: 'button', className: 'pf-btn sm danger', onClick: () => setDelTarget(p) }, '删除'))),
-            )) : h('tr', null, h('td', { colSpan: 8, className: 'pf-empty' }, all.length ? '没有符合条件的项目' : '还没有项目，点右上角「新建项目」开始'))))));
+            )) : h('tr', null, h('td', { colSpan: 8, className: 'pf-empty' }, all.length ? '没有符合条件的项目' : '还没有项目，点右上角「新建项目」开始'))))),
+        bindDialog);
     }
 
     // ---------- work: timesheets ----------
@@ -3979,7 +4286,68 @@ window.__ModuleLoader__.load({
       return out.join('\n').trim();
     }
 
-    function TyProjects({ s, toast, go }) {
+    // 天源项目「导入」前的选择：新建本地文件夹，还是绑定一个已经存在的文件夹。
+    // 这个选择是用户明确要的「强关联」入口 —— 一进来就决定这个天源项目对应磁盘上哪个目录。
+    function TyImportDialog({ project, busy, onCancel, onConfirm, toast }) {
+      const p = project || {};
+      const [mode, setMode] = useState('new');     // new=按编号简称新建 | bind=绑定已有目录
+      const [abs, setAbs] = useState('');
+      const [info, setInfo] = useState(null);
+      // p 是天源 MCP 的原始行（projectCode/projectName），不是本地记录（code/shortName）
+      const autoName = folderNameOf({ code: p.projectCode, shortName: p.projectName });
+      const probe = async v => {
+        if (!String(v || '').trim()) { setInfo(null); return; }
+        try {
+          const r = await fetch(PREFIX + '/project/folder/probe', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: v }),
+          });
+          const d = await r.json().catch(() => ({}));
+          setInfo(d && d.ok ? d : { error: (d && d.error) || '路径不可用' });
+        } catch (e) { setInfo({ error: String((e && e.message) || e) }); }
+      };
+      const pick = async () => {
+        let got = '';
+        try { got = await pickDirectoryPath(); } catch (e) { toast(String((e && e.message) || e), 'warn'); return; }
+        if (!got) return;
+        got = got.replace(/[\\/]+$/, '');
+        setAbs(got);
+        probe(got);
+      };
+      const canOk = mode === 'new' || (!!String(abs).trim() && !!info && !info.error);
+      return h(Modal, { title: '导入天源项目 · ' + (p.projectName || '未命名'), onClose: busy ? () => {} : onCancel, style: { maxWidth: 700 } },
+        h('p', { className: 'pf-hint', style: { margin: '0 0 12px' } },
+          esc(p.projectCode || '无编号'), p.assessmentObject ? ' · ' + esc(p.assessmentObject) : '', ' · 链接后本地项目与天源项目一一对应，之后同步/打开都认这条关系。'),
+        h('div', { className: 'wb-row', style: { gap: 8, marginBottom: 12 } },
+          h('button', { type: 'button', className: 'pf-btn ' + (mode === 'new' ? 'pri' : ''), onClick: () => setMode('new') }, '新建本地文件夹'),
+          h('button', { type: 'button', className: 'pf-btn ' + (mode === 'bind' ? 'pri' : ''), onClick: () => setMode('bind') }, '绑定已有文件夹')),
+        mode === 'new'
+          ? h('div', { className: 'pf-hint' }, '会在项目根目录下按「编号 简称」新建：', h('code', null, autoName))
+          : h('div', null,
+            h('div', { className: 'pf-folder' },
+              h('input', {
+                className: 'pf-in', value: abs, placeholder: '已存在的绝对路径，例如 ' + autoName,
+                onChange: e => setAbs(e.target.value), onBlur: () => probe(abs),
+              })),
+            h('div', { className: 'pf-folder-acts', style: { marginTop: 8 } },
+              h('button', { type: 'button', className: 'pf-btn', onClick: pick }, '选择文件夹…')),
+            info
+              ? (info.error
+                ? h('div', { className: 'pf-err', style: { marginTop: 8 } }, info.error)
+                : h('div', { style: { marginTop: 8, fontSize: 12 } },
+                  h('span', { className: 'pf-folder-chip' }, '目录可用'),
+                  h('span', { className: 'pf-hint', style: { marginLeft: 8 } }, (info.dirs || 0) + ' 个子目录 · ' + (info.files || 0) + ' 个文件'
+                    + (info.sample && info.sample.length ? ' · ' + info.sample.slice(0, 4).join('、') : ''))))
+              : null),
+        h('div', { className: 'wb-row', style: { justifyContent: 'flex-end', marginTop: 16, gap: 8 } },
+          h('button', { type: 'button', className: 'pf-btn', disabled: !!busy, onClick: onCancel }, '取消'),
+          h('button', {
+            type: 'button', className: 'pf-btn pri', disabled: !!busy || !canOk,
+            onClick: () => onConfirm(mode === 'bind' ? { abs: String(abs).trim() } : {}),
+          }, busy ? '导入中…' : '确认导入')));
+    }
+
+
+    function TyProjects({ s, toast, go, onOpenProject }) {
       // 本地缓存：同步后写入 localStorage（经 store），打开页面只读缓存，不再自动联网。
       const cached = s.work.ty.cachedProjects;
       const [rows, setRows] = useState(Array.isArray(cached) ? cached : null);
@@ -3991,6 +4359,7 @@ window.__ModuleLoader__.load({
       const [expMenu, setExpMenu] = useState(null);   // { id, x, y } 「更多」下拉菜单
       const [exporting, setExporting] = useState(''); // '<id>:<kind>' 导出进行中
       const [exportDialog, setExportDialog] = useState(null);
+      const [importPick, setImportPick] = useState(null);   // 待选导入方式的天源项目 {project}
       const [reportDialog, setReportDialog] = useState(null);   // 报告/说明 · 官方格式 Word 导出工作区
       const exportBusy = useRef(false);
       const api = async (path, opts) => { const r = await fetch(PREFIX + path, opts); const t = await r.text(); let d = {}; try { d = JSON.parse(t); } catch (e) { d = { raw: String(t).slice(0, 200) }; } if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + String(t).slice(0, 160)); if (d && d.error) throw new Error(String(d.error)); return d; };
@@ -4252,7 +4621,8 @@ window.__ModuleLoader__.load({
               h('b', null, ' 按「报告格式」页的参数设置表格格式'),
               h('div', { className: 'wb-hint', style: { marginLeft: 22 } },
                 '下载后用「评估工具箱」的表格设置模块处理，参数取自报告格式页（字体/字号/行高/边框/表头重复加粗/数字右对齐/单倍行距）；只改格式，不改任何文字。',
-                ' 已经符合这些参数的表格会整张跳过不动，附件区的表格也整段跳过——避免把原本排好的格式改坏。',
+                ' 天源默认那种每列一样宽的表格，会按内容重新分配列宽（表头不再折行）；你手工调过的列宽一律不动。',
+                ' 已经符合这些参数的表格会整张跳过；附件里从 Word 粘进来的表格也整段跳过——避免把原本排好的格式改坏。',
                 ' 处理失败会保留原文件并在结果里提示。')),
             h('div', { className: 'wb-hint', style: { marginLeft: 22, marginTop: 4 } },
               '提示：页边距、标题层级等正文排版由天源系统决定，此处不覆盖。')) : null,
@@ -4418,14 +4788,14 @@ window.__ModuleLoader__.load({
       const pickExportDirectory = async field => {
         if (!workspacePicker) return;
         try {
-          const path = await workspacePicker.pickDirectory();
+          const path = await pickDirectoryPath();
           if (path) setExportDialog(prev => prev && prev.status === 'confirm' ? { ...prev, [field]: path, ...(field === 'sourcePath' ? { sourceFiles: null } : {}) } : prev);
         } catch (e) { toast('选择目录失败：' + String(e.message || e), 'danger'); }
       };
       const pickExportDirectoryReport = async update => {
         if (!workspacePicker) return;
         try {
-          const path = await workspacePicker.pickDirectory();
+          const path = await pickDirectoryPath();
           if (path) update({ outputDir: path });
         } catch (e) { toast('选择目录失败：' + String(e.message || e), 'danger'); }
       };
@@ -4520,8 +4890,10 @@ window.__ModuleLoader__.load({
           setDetail({ project: p, companies: Array.isArray(comps) ? comps : [], ctx: ctxMap, loading: false });
         } catch (e) { setDetail({ project: p, error: e.message, loading: false }); }
       };
-      const importProject = async (p) => {
+      // opts.abs：把项目关联到一个「已经存在的本地文件夹」（而不是按编号简称新建）
+      const importProject = async (p, opts) => {
         if (importing) return;
+        const bindAbs = String((opts && opts.abs) || '').trim();
         setImporting(String(p.id));
         try {
           // 导入要填满四个页签，所以除了列表行，还得拉项目上下文与被评估公司
@@ -4533,8 +4905,14 @@ window.__ModuleLoader__.load({
           const existing = s.work.projects.find(x => String(x.tyId) === String(p.id));
           // 已导入过的再点就是「更新」：天源的字段覆盖过来，本地自己排的工时/归档日不动
           const merged = existing
-            ? { ...existing, ...rec, id: existing.id, deadline: existing.deadline || rec.deadline || '', budgetHours: existing.budgetHours || 0 }
+            ? {
+              ...existing, ...rec, id: existing.id, deadline: existing.deadline || rec.deadline || '', budgetHours: existing.budgetHours || 0,
+              // 本地绑定的文件夹是「人做过决定」的结果，不能被天源同步覆盖掉
+              folderPath: existing.folderPath || '', folderBoundAt: existing.folderBoundAt || '',
+            }
             : rec;
+          // 选了「已有文件夹」就把它写进项目的绑定路径，后续打开/写盘/归档都认这个目录
+          if (bindAbs) { merged.folderPath = bindAbs; merged.folderBoundAt = new Date().toISOString(); }
           // 文件夹：<项目编号> <项目简称>（老项目若还留着「年份 项目名」目录，宿主会优先复用）。
           // 建完不自动弹窗（列表里点项目名才打开），但要把路径回报出来，用户能立刻确认建在哪。
           let folder = '';
@@ -4544,7 +4922,7 @@ window.__ModuleLoader__.load({
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                folder: folderNameOf(merged), legacy: legacyFolderName(merged),
+                folder: folderNameOf(merged), legacy: legacyFolderName(merged), abs: projectAbs(merged),
                 year: merged.year, name: merged.shortName || merged.name, create: true, open: false,
               }),
             });
@@ -4584,16 +4962,26 @@ window.__ModuleLoader__.load({
           h(Inp, { placeholder: '搜索项目 / 编号 / 部门', value: kw, onChange: e => setKw(e.target.value), style: { width: 190 } }),
           h(Btn, { variant: 'pri', onClick: syncNow, disabled: busy }, busy ? '同步中…' : '刷新同步'),
           h(Btn, { onClick: () => window.open(TY_BASE, '_blank', 'noopener') }, '打开天源')) },
-          h('p', { className: 'wb-hint', style: { marginTop: 0 } }, '数据来自天源 MCP（mcp.zhrdc.net/valuation-mcp）：共 ' + (rows ? rows.length : '—') + ' 个项目 · ' + syncedText + '。打开页面只显示上次保存到本机 localStorage 的副本，不会自动联网；点右上角「刷新同步」才拉取天源最新项目并覆盖保存到本地。点「详情」查看被评估公司与项目上下文，「导入」会按「项目编号 项目简称」建好项目文件夹，并把基本信息 / 客户信息 / 被评估单位信息 / 合同信息四组一起同步进本地项目；已导入的再点就是「更新」，本地自己排的工时与归档日不受影响。'),
+          h('p', { className: 'wb-hint', style: { marginTop: 0 } }, '数据来自天源 MCP（mcp.zhrdc.net/valuation-mcp）：共 ' + (rows ? rows.length : '—') + ' 个项目 · ' + syncedText + '。打开页面只显示上次保存到本机 localStorage 的副本，不会自动联网；点右上角「刷新同步」才拉取天源最新项目并覆盖保存到本地。点「导入」会让你选：按「项目编号 项目简称」新建本地文件夹，或直接绑定一个已经存在的本地文件夹 —— 选定之后，这个天源项目与那个目录一一对应，本地项目里的打开/底稿/归档都只认它。已导入的项目点名字直接进本地项目界面；要回天源网页，用行尾的「天源」按钮。已导入的再点「导入」就是「更新」，同步四组信息但不动本地工时与归档日。'),
           dbg && h('div', { className: 'wb-alert danger', style: { marginBottom: 10 } }, h('div', { style: { flex: 1 } }, h('div', { className: 't' }, '最近一次同步失败'), h('div', { className: 'b' }, '本地已保存的数据未受影响。' + (tyMeta.cachedAt ? '可在「连接设置」检查授权后重试。' : '请先在「连接设置」完成授权。') + ' 错误：' + dbg))),
           !hasRows ? (busy ? Empty('正在同步并保存到本地…') : Empty('本地暂无项目数据，点右上角「刷新同步」拉取并保存')) : h(Table, { cols: ['项目编号 / 名称', '部门', '状态', '风险', '基准日', '人员', '操作'], rows: filtered.map(p => {
             const stt = TY_STATUS[Number(p.projectStatus)] || { t: '状态' + p.projectStatus, c: 'grey' };
             const people = [...(p.partnerList || []).map(x => x.fullName), ...(p.managerList || []).slice(0, 3).map(x => x.fullName)].filter(Boolean).join('、');
-            const imported = s.work.projects.some(x => String(x.tyId) === String(p.id));
+            const localOne = s.work.projects.find(x => String(x.tyId) === String(p.id));
+            const imported = !!localOne;
             return h('tr', { key: p.id },
               h('td', null,
-                h('div', null, h('a', { className: 'wb-link', href: tyProjectUrl(p.id), target: '_blank', rel: 'noopener', title: '在天源打开该项目' }, h('b', null, esc(p.projectName)))),
-                h('div', { className: 'muted' }, esc(p.projectCode) + (p.assessmentObject ? ' · ' + esc(p.assessmentObject) : ''))),
+                // 项目名称 → 进本地项目界面（不是跳天源）。没导入过的先提示导入。
+                h('div', null, h('div', {
+                  className: imported ? 'pf-name' : 'pf-name muted',
+                  title: imported ? '进入项目界面（作业信息 / 股权信息 / 底稿目录）' : '这个项目还没导入本地，先点「导入」建好本地项目',
+                  onClick: () => {
+                    if (imported) { if (onOpenProject) onOpenProject(localOne.id); return; }
+                    toast('「' + (p.projectName || '') + '」还没导入本地项目，先点这一行的「导入」', 'warn');
+                  },
+                }, h('b', null, esc(p.projectName)))),
+                h('div', { className: 'muted' }, esc(p.projectCode) + (p.assessmentObject ? ' · ' + esc(p.assessmentObject) : '')
+                  + (imported && projectAbs(localOne) ? ' · 📁 ' + projectAbs(localOne) : ''))),
               h('td', null, esc(p.executionDepartment || '—')),
               h('td', null, h('span', { className: 'wb-tag ' + stt.c }, stt.t)),
               h('td', null, h('span', { className: 'wb-tag ' + (p.riskLevelName === 'A' ? 'red' : 'grey') }, p.riskLevelName || '—')),
@@ -4603,9 +4991,16 @@ window.__ModuleLoader__.load({
                 h(Btn, { className: 'sm', onClick: () => openDetail(p) }, '详情'),
                 h(Btn, {
                   className: 'sm', variant: imported ? '' : 'pri', disabled: importing === String(p.id),
-                  title: imported ? '从天源重新同步四组信息（本地工时与归档日不动）' : '建「项目编号 项目简称」文件夹，并把四组信息同步到本地项目',
-                  onClick: () => importProject(p),
+                  title: imported ? '从天源重新同步四组信息（本地工时与归档日不动）' : '选择导入方式：新建本地文件夹，或绑定一个已有的本地文件夹',
+                  onClick: () => {
+                    if (imported) return importProject(p);
+                    setImportPick({ project: p });
+                  },
                 }, importing === String(p.id) ? '导入中…' : (imported ? '更新' : '导入')),
+                imported
+                  ? h(Btn, { className: 'sm', title: '在本地打开这个项目的目录', onClick: () => { if (onOpenProject) onOpenProject(localOne.id); } }, '打开')
+                  : null,
+                h(Btn, { className: 'sm', title: '在天源网页打开该项目', onClick: () => window.open(tyProjectUrl(p.id), '_blank', 'noopener') }, '天源'),
                 h(Btn, {
                   className: 'sm', disabled: !!exporting,
                   title: '更多操作：导出明细表 / 导出申报表 / 导出报告·说明（可多选）',
@@ -4619,6 +5014,13 @@ window.__ModuleLoader__.load({
             );
           }) }),
         ),
+        importPick ? h(TyImportDialog, {
+          project: importPick.project,
+          toast,
+          busy: importing === String(importPick.project.id),
+          onCancel: () => setImportPick(null),
+          onConfirm: async (opts) => { await importProject(importPick.project, opts); setImportPick(null); },
+        }) : null,
         expMenu && h('div', { onClick: () => setExpMenu(null), style: { position: 'fixed', inset: 0, zIndex: 9990 } }),
         expMenu && h('div', { style: { position: 'fixed', left: expMenu.x, top: expMenu.y, zIndex: 9991, background: 'var(--dsw-alias-bg-overlay,#fff)', border: '1px solid var(--dsw-alias-border-l2,#bbb)', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,.25)', padding: 6, minWidth: 150 } },
           [['detail', '导出明细表'], ['declare', '导出申报表'], ['reports', '导出报告/说明']].map(([k, label]) => h('button', {
@@ -4718,7 +5120,13 @@ window.__ModuleLoader__.load({
             detail.error && h('div', { className: 'wb-hint', style: { color: 'var(--dsw-alias-state-error-primary,#c0392b)' } }, '部分数据读取失败：' + detail.error),
             h('div', { className: 'wb-form-foot' },
               h(Btn, { onClick: () => setDetail(null) }, '关闭'),
-              h(Btn, { variant: 'pri', onClick: () => window.open(tyProjectUrl(detail.project.id), '_blank', 'noopener') }, '在天源打开项目页'),
+              h(Btn, { onClick: () => window.open(tyProjectUrl(detail.project.id), '_blank', 'noopener') }, '在天源打开项目页'),
+              (() => {
+                // 主按钮给「进本地项目界面」：对着这个天源项目干活，主场景是本地底稿，不是天源网页
+                const local = s.work.projects.find(x => String(x.tyId) === String(detail.project.id));
+                if (!local) return null;
+                return h(Btn, { variant: 'pri', onClick: () => { setDetail(null); if (onOpenProject) onOpenProject(local.id); } }, '打开本地项目');
+              })(),
             ),
           ),
         ),
@@ -5438,10 +5846,21 @@ window.__ModuleLoader__.load({
     }
 
     function Work({ s, sub, toast, go }) {
+      // 「打开哪个项目」放在 Work 这一层：本地项目列表点名字进项目界面，天源项目页点名字
+      // 也要能进同一个界面（而不是跳去天源网页）。两页共用同一个 openId，切页签不丢。
+      const [openProjectId, setOpenProjectId] = useState('');
+      const openProject = id => {
+        if (!id) return;
+        setOpenProjectId(String(id));
+        go('work', 'projects');
+      };
       return h('div', null,
         h('div', { className: 'wb-tabs' },
           [['projects', '本地项目'], ['logs', '工时管理'], ['tylive', '天源项目'], ['ty', '连接设置']].map(([k, t]) => h('button', { key: k, className: 'wb-tab ' + (sub === k || (!sub && k === 'projects') ? 'on' : ''), onClick: () => go('work', k) }, t))),
-        sub === 'logs' ? h(Timesheets, { s }) : sub === 'ty' ? h(Tianyuan, { s, toast }) : sub === 'tylive' ? h(TyProjects, { s, toast, go }) : h(Projects, { s, toast, go }),
+        sub === 'logs' ? h(Timesheets, { s })
+          : sub === 'ty' ? h(Tianyuan, { s, toast })
+            : sub === 'tylive' ? h(TyProjects, { s, toast, go, onOpenProject: openProject })
+              : h(Projects, { s, toast, go, openId: openProjectId, setOpenId: setOpenProjectId }),
       );
     }
 
@@ -6902,12 +7321,15 @@ window.__ModuleLoader__.load({
       const fmtTable = h('div', { style: { overflowX: 'auto' } },
         h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
           h('thead', null, h('tr', null,
-            ['类别', '字体', '字号', '行距', '缩进（字符）', '段前（磅）', '段后（磅）'].map((t, i) => h('th', { key: t, style: { ...TD_BASE, textAlign: i ? 'left' : 'left', background: 'var(--dsw-alias-bg-layer-2,#f5f5f5)', color: 'var(--dsw-alias-label-secondary,#666)', fontWeight: 600, position: 'sticky', top: 0 } }, t)))),
+            ['类别', '字体', '西文字体（含数字）', '字号', '行距', '缩进（字符）', '段前（磅）', '段后（磅）'].map((t, i) => h('th', { key: t, style: { ...TD_BASE, textAlign: i ? 'left' : 'left', background: 'var(--dsw-alias-bg-layer-2,#f5f5f5)', color: 'var(--dsw-alias-label-secondary,#666)', fontWeight: 600, position: 'sticky', top: 0 } }, t)))),
           h('tbody', null, groups.map(([key, label]) => {
             const hasPara = PARA_GROUPS.includes(key);
             return h('tr', { key },
               h('td', { style: { ...TD_BASE, fontWeight: 600 } }, label),
               h('td', { style: TD_BASE }, fontField(null, [key, 'font'])),
+              h('td', { style: TD_BASE }, hasPara
+                ? fontField(null, [key, 'ascii_font'])
+                : h('span', { style: { color: 'var(--dsw-alias-label-secondary,#999)' } }, key === 'table' ? '见下方表格设置' : '—')),
               h('td', { style: TD_BASE }, sizeField(null, [key, 'size_half_points'])),
               ...(hasPara ? [
                 h('td', { key: 'line', style: TD_BASE }, lineCell(key)),
@@ -6929,6 +7351,7 @@ window.__ModuleLoader__.load({
         draft && h('fieldset', { disabled: busy, style: { border: 0, padding: 0, margin: 0, minWidth: 0 } },
           h('h3', { style: { marginTop: 22 } }, '文字与段落设置'),
           h('div', { className: 'wb-hint' }, '字体与字号按 Word/WPS 习惯下拉选择；行距选「固定值」后填磅值；封面与表格无段落设置，缺省沿用官方默认。'),
+          h('div', { className: 'wb-hint' }, '「西文字体（含数字）」决定这一段里的数字、英文字母用哪个字体。留空时跟随左侧中文字体——正文设宋体，数字就跟着宋体，不会再出现个别数字变成 Times New Roman 或 Calibri 的情况。表格不读这一列，它用下方「表格设置」里的西文字体。'),
           fmtTable,
           h('h3', { style: { marginTop: 22 } }, '表格设置'),
           h('p', { className: 'wb-hint' }, '表格各项均可独立设置；评估工具箱推荐值：宋体 + Times New Roman、五号、最小行高 0.6 厘米、重复标题行、上/下线 1.5 磅、内部线 0.5 磅。'),
@@ -7029,7 +7452,7 @@ window.__ModuleLoader__.load({
         } }, '重置参数'));
     }
 
-    const DT_REV = 'rev20';
+    const DT_REV = 'rev22';
     // DSH 桌面壳原生目录选择（preload: __DSH_DIRECTORY_PICKER__），uiWorkspace 不可用时兜底
     function dtPickDirectory() {
       try {
@@ -7364,7 +7787,7 @@ window.__ModuleLoader__.load({
 
     // ---- 子面板二：安居客数据 ----
     function DataToolsAnjuke({ toast }) {
-      const ANJUKE_DEFAULTS = { sourceUrl: '', caseType: 'auto', maxCases: '10', keyword: '', waitVerification: true, screenshot: false, autoOpenResult: true, outputDir: '' };
+      const ANJUKE_DEFAULTS = { sourceUrl: '', caseType: 'auto', maxCases: '10', keyword: '', waitVerification: true, screenshot: false, autoOpenResult: true, browserEngine: 'opencli', outputDir: '' };
       const anjukeSavedRef = useRef(null);
       if (!anjukeSavedRef.current) anjukeSavedRef.current = dtLoadParams('anjuke', ANJUKE_DEFAULTS);
       const aSaved = anjukeSavedRef.current;
@@ -7376,12 +7799,16 @@ window.__ModuleLoader__.load({
       const [screenshot, setScreenshot] = useState(aSaved.screenshot === true);
       // 等价工具箱 anjukePropertyAutoOpenResult（默认 true）
       const [autoOpenResult, setAutoOpenResult] = useState(aSaved.autoOpenResult !== false);
+      // 抓取引擎：opencli = 复用用户已登录的真实 Chrome（默认，最不易触发验证码）；
+      // playwright = 早期实现，起一个独立的受控浏览器（新身份，容易被安居客判爬虫）
+      const [browserEngine, setBrowserEngine] = useState(aSaved.browserEngine === 'playwright' ? 'playwright' : 'opencli');
       const [outputDir, setOutputDir] = useState(aSaved.outputDir || '');
       const applyAnjukeDefaults = (next) => {
         setSourceUrl(next.sourceUrl || ''); setCaseType(next.caseType || 'auto');
         setMaxCases(next.maxCases || '10'); setKeyword(next.keyword || '');
         setWaitVerification(next.waitVerification !== false); setScreenshot(next.screenshot === true);
         setAutoOpenResult(next.autoOpenResult !== false);
+        setBrowserEngine(next.browserEngine === 'playwright' ? 'playwright' : 'opencli');
         setOutputDir(next.outputDir || '');
       };
       const [task, setTask] = useState(null);
@@ -7426,6 +7853,7 @@ window.__ModuleLoader__.load({
             waitVerification,
             screenshot,
             autoOpenResult,
+            browserEngine,
             outputDirectory: outputDir.trim(),
             [isDetail ? 'detailUrls' : 'listUrls']: [url],
           };
@@ -7488,11 +7916,15 @@ window.__ModuleLoader__.load({
             h('input', { className: 'wb-input', style: { width: 90 }, inputMode: 'numeric', value: maxCases, onChange: e => setMaxCases(e.target.value.replace(/\D/g, '')) })),
           h('label', { className: 'wb-label', style: { flex: '1 1 200px' } }, '关键词过滤（可选）',
             h('input', { className: 'wb-input', style: { width: '100%' }, value: keyword, maxLength: 60, onChange: e => setKeyword(e.target.value) }))),
+        h('label', { className: 'wb-label', style: { maxWidth: 320 }, title: 'opencli 直接驱动你已登录的真实 Chrome，无需另开浏览器；Playwright 会启动一个独立的受控浏览器' }, '抓取引擎',
+          h('select', { className: 'wb-select', value: browserEngine, onChange: e => setBrowserEngine(e.target.value) },
+            h('option', { value: 'opencli' }, 'opencli（真实 Chrome，推荐）'),
+            h('option', { value: 'playwright' }, '内置浏览器（Playwright）'))),
         h('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' } },
           h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' }, title: '遇到验证码时轮询等待人工完成后继续，而不是直接判失败' },
             h('input', { type: 'checkbox', checked: waitVerification, onChange: e => setWaitVerification(e.target.checked) }), '遇到验证码等待人工完成'),
-          h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' }, title: '为每个案例保存整页截图作为证据' },
-            h('input', { type: 'checkbox', checked: screenshot, onChange: e => setScreenshot(e.target.checked) }), '保存整页截图'),
+          h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: browserEngine === 'opencli' ? 'not-allowed' : 'pointer', opacity: browserEngine === 'opencli' ? 0.5 : 1 }, title: browserEngine === 'opencli' ? 'opencli 复用当前真实标签页，无法对他人标签页做全页截图；需要截图请切换到「内置浏览器」' : '为每个案例保存整页截图作为证据' },
+            h('input', { type: 'checkbox', checked: screenshot && browserEngine !== 'opencli', disabled: browserEngine === 'opencli', onChange: e => setScreenshot(e.target.checked) }), '保存整页截图'),
           h('label', { style: { display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, cursor: 'pointer' }, title: '采集完成后自动用系统默认程序打开结果页' },
             h('input', { type: 'checkbox', checked: autoOpenResult, onChange: e => setAutoOpenResult(e.target.checked) }), '完成后自动打开结果页')),
         h('label', { className: 'wb-label' }, '输出目录（默认：~/Documents/天源评估/个人工作台/数据工具输出/安居客案例）',
@@ -7501,7 +7933,7 @@ window.__ModuleLoader__.load({
           h('button', { className: 'wb-btn', onClick: run, disabled: busy }, busy ? '任务进行中…' : '开始采集'),
           h(DtParamButtons, {
             paramKey: 'anjuke',
-            snapshot: { sourceUrl, caseType, maxCases, keyword, waitVerification, screenshot, autoOpenResult, outputDir },
+            snapshot: { sourceUrl, caseType, maxCases, keyword, waitVerification, screenshot, autoOpenResult, browserEngine, outputDir },
             defaults: ANJUKE_DEFAULTS,
             onApply: applyAnjukeDefaults,
             toast,
@@ -8253,17 +8685,628 @@ window.__ModuleLoader__.load({
           h('button', { className: 'wb-btn sm', onClick: () => save(true), disabled: busy }, '恢复默认底图')));
     }
 
+    // ---------- 报告比对：Word 线下改稿 ↔ 天源线上报告节点 ----------
+    // 形态说明：整页四步平铺（选报告 → 上传改稿 → 比对定位 → 写回线上）。
+    // 不用弹窗——弹窗装不下四步内容，而且切页签就丢结果。
+    //
+    // 「选报告」不是「选本地基线」：用户不需要先去导出。选好项目/公司/类型后，
+    // 宿主当场把线上已生成的那版 DOCX 下载下来当原版，比对完只回传一次性凭据。
+
+    const RC_STEPS = ['选报告', '上传改稿', '比对定位', '写回线上'];
+    const RC_TYPES = [{ v: '1', n: '评估报告' }, { v: '2', n: '评估说明' }, { v: '3', n: '长投说明' }];
+    const RC_WARNING_LABELS = {
+      'non-body content such as headers, footers, notes or comments is not compared': '页眉、页脚、脚注、尾注及批注等正文外内容未比对',
+      'media, embedded objects and charts are not compared': '图片、嵌入对象和图表未比对',
+      'document contains unsupported objects, fields, content controls or formulas': '包含不支持的对象、域、内容控件或公式',
+      'tracked revisions are not interpreted': '未解析修订记录',
+      'nested paragraphs are not fully compared': '嵌套段落未完整比对',
+      'paragraphs in unsupported body containers are not compared': '不支持的正文容器内段落未比对',
+      'formatting, layout, numbering, relationships and non-body content are not compared': '格式、版式、编号、关联关系及正文外内容未比对',
+    };
+    function rcWhen(value) {
+      const text = String(value == null ? '' : value);
+      return text ? text.replace('T', ' ').slice(0, 16) : '—';
+    }
+    function rcSize(bytes) {
+      const n = Number(bytes);
+      if (!Number.isFinite(n) || n <= 0) return '—';
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+      return (n / 1024 / 1024).toFixed(1) + ' MB';
+    }
+    // 含变量 / 图片 / 附件：这类段落替换整段会丢结构，写回一律不碰。
+    function rcUnsupported(change) {
+      const flag = item => !!(item && typeof item === 'object' && item.unsupported === true);
+      if (!change || typeof change !== 'object') return false;
+      if (change.type === 'unpaired') {
+        const left = Array.isArray(change.baseline) ? change.baseline : [];
+        const right = Array.isArray(change.modified) ? change.modified : [];
+        return left.some(flag) || right.some(flag);
+      }
+      return flag(change.baseline) || flag(change.modified);
+    }
+    function rcShort(text, max) {
+      const t = String(text == null ? '' : text);
+      return t.length > max ? t.slice(0, max) + '…' : t;
+    }
+    const rcSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    // 报告比对：只上传改稿，原版直接从线上取。
+    //
+    // 关键取舍：不再要求先去「工作」页签导出一份基线。
+    // 选好项目/公司/报告类型后，宿主当场下载线上已生成的那版 DOCX 当原版，
+    // 同时抓一份节点树与完整版正文（写回要用），比对完只回传一个一次性 token。
+    // 这样用户的心智负担只剩一句话：把改过的稿子丢进来。
+    function ReportComparePage({ s, toast, onDirtyChange }) {
+      const cachedProjects = (s && s.work && s.work.ty && Array.isArray(s.work.ty.cachedProjects)) ? s.work.ty.cachedProjects : [];
+      const [projectId, setProjectId] = useState('');
+      const [companies, setCompanies] = useState(null);
+      // 报告类型是否来自天源的真实配置。浏览器通道不可用时退回 MCP，
+      // 那时拿不到 reportConfigList，types 为 null，这里置 false 以便界面说明。
+      const [typesKnown, setTypesKnown] = useState(true);
+      const [companyId, setCompanyId] = useState('');
+      const [reportType, setReportType] = useState('1');
+      const [versions, setVersions] = useState(null);
+      const [attachId, setAttachId] = useState('');
+      const [baselineInfo, setBaselineInfo] = useState(null);
+      const [file, setFile] = useState(null);
+      const [busy, setBusy] = useState('');
+      const [buildingMsg, setBuildingMsg] = useState('');
+      const [error, setError] = useState('');
+      const [result, setResult] = useState(null);
+      const [compareToken, setCompareToken] = useState('');
+      const [checked, setChecked] = useState(() => new Set());
+      const [confirming, setConfirming] = useState(false);
+      const [writeResult, setWriteResult] = useState(null);
+      const fileRef = useRef(null);
+      const buildFlag = useRef(null);
+
+      const requestJson = async (path, options) => {
+        const response = await fetch(PREFIX + path, options);
+        const text = await response.text();
+        let data = null;
+        try { data = JSON.parse(text); } catch (e) { data = null; }
+        if (!response.ok || !data || data.ok !== true) {
+          throw new Error((data && (data.error || data.message)) || ('HTTP ' + response.status + (text ? '：' + text.slice(0, 200) : '')));
+        }
+        return data;
+      };
+      // /ty/call 是宿主的天源工具通道（get_project_companies 等）。
+      // 注意它返回的是 { content, structuredContent, data, isError }，没有 ok 字段，
+      // 所以不能复用上面的 requestJson（那个按 ok===true 判成功，会把每次都判成失败）。
+      const callTool = async (name, args) => {
+        const response = await fetch(PREFIX + '/ty/call', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, arguments: args || {} }),
+        });
+        const text = await response.text();
+        let data = null;
+        try { data = JSON.parse(text); } catch (e) { data = null; }
+        if (!response.ok) throw new Error((data && data.error) || ('HTTP ' + response.status));
+        if (data && data.error) throw new Error(data.error);
+        if (data && data.isError) {
+          // MCP 把工具级错误（参数校验失败等）放在 content[0].text 里回来。
+          const raw = typeof data.data === 'string' ? data.data : String((data.data && data.data.text) || '');
+          throw new Error(raw.slice(0, 200) || 'MCP 返回错误');
+        }
+        return data && data.data !== undefined ? data.data : (data && data.structuredContent);
+      };
+
+      // 项目下拉的默认值：优先沿用上次选择，否则取缓存里的第一个。
+      useEffect(() => {
+        if (projectId) return;
+        const first = cachedProjects.find(p => p && /^\d+$/.test(String(p.id == null ? '' : p.id)));
+        if (first) setProjectId(String(first.id));
+      }, [cachedProjects, projectId]);
+
+      // 项目 → 公司列表。
+      useEffect(() => {
+        let alive = true;
+        setCompanies(null); setCompanyId(''); setVersions(null); setAttachId('');
+        setResult(null); setCompareToken(''); setWriteResult(null); setChecked(new Set()); setConfirming(false);
+        setBaselineInfo(null); setError('');
+        if (fileRef.current) fileRef.current.value = '';
+        setFile(null);
+        if (!/^\d+$/.test(String(projectId || ''))) return () => { alive = false; };
+        (async () => {
+          try {
+            // 走 /ty/report-companies 而不是 MCP 的 get_project_companies：
+            // 后者只给公司名，拿不到"这家公司配置了哪些报告类型"，
+            // 前端就只能无条件列出三个类型，选到没配置的那个必然 0 版本。
+            const data = await requestJson('/ty/report-companies?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' });
+            const list = Array.isArray(data.companies) ? data.companies : [];
+            const seen = new Set();
+            const rows = list.map(c => {
+              const id = String((c && c.id) == null ? '' : c.id).trim();
+              const types = Array.isArray(c && c.types) ? c.types.map(Number).filter(t => [1, 2, 3].includes(t)) : null;
+              return { id, name: String((c && c.name) || '未命名公司'), types };
+            }).filter(c => /^\d+$/.test(c.id) && !seen.has(c.id) && seen.add(c.id));
+            if (!alive) return;
+            setTypesKnown(data.typesKnown !== false);
+            setCompanies(rows);
+            if (rows.length === 1) setCompanyId(rows[0].id);
+          } catch (e) {
+            if (!alive) return;
+            setCompanies([]);
+            setTypesKnown(true);
+            setError('读取公司列表失败：' + String(e.message || e));
+          }
+        })();
+        return () => { alive = false; };
+      }, [projectId]);
+
+      const loadVersions = useCallback(async () => {
+        if (!/^\d+$/.test(String(projectId || '')) || !/^\d+$/.test(String(companyId || ''))) { setVersions(null); return; }
+        setBusy('versions'); setError('');
+        try {
+          const q = '?projectId=' + encodeURIComponent(projectId)
+            + '&companyId=' + encodeURIComponent(companyId)
+            + '&reportType=' + encodeURIComponent(reportType);
+          const data = await requestJson('/ty/report-versions' + q, { cache: 'no-store' });
+          setVersions(Array.isArray(data.versions) ? data.versions : []);
+        } catch (e) {
+          setVersions([]);
+          setError('读取线上版本失败：' + String(e.message || e));
+        } finally { setBusy(''); }
+      }, [projectId, companyId, reportType]);
+
+      // 公司或报告类型一变，之前的版本选择与比对结果全部作废。
+      useEffect(() => {
+        setAttachId(''); setVersions(null); setResult(null); setCompareToken(''); setWriteResult(null);
+        setChecked(new Set()); setConfirming(false); setBaselineInfo(null);
+        if (fileRef.current) fileRef.current.value = '';
+        setFile(null);
+        loadVersions();
+      }, [companyId, reportType, loadVersions]);
+
+      useEffect(() => () => { if (buildFlag.current) buildFlag.current.stop = true; }, []);
+
+      const companyName = useMemo(() => {
+        const hit = (companies || []).find(c => c && String(c.id) === String(companyId));
+        return hit ? hit.name : '';
+      }, [companies, companyId]);
+      const typeName = (RC_TYPES.find(t => t.v === String(reportType)) || {}).n || '报告';
+      // 被评估公司在天源里真实配置过的报告类型；null 表示这次没读到配置。
+      const availableTypes = useMemo(() => {
+        const hit = (companies || []).find(c => c && String(c.id) === String(companyId));
+        if (!hit) return null;
+        return Array.isArray(hit.types) ? hit.types : null;
+      }, [companies, companyId]);
+      // 下拉只列真实配置过的类型；一个都没配就明确说出来，别让人去点必然失败的「重新生成」。
+      const typeOptions = useMemo(() => {
+        if (!typesKnown || !availableTypes) return RC_TYPES;
+        return RC_TYPES.filter(t => availableTypes.includes(Number(t.v)));
+      }, [typesKnown, availableTypes]);
+
+      const changes = result && Array.isArray(result.changes) ? result.changes : [];
+      const locate = result && result.locate && typeof result.locate === 'object' ? result.locate : null;
+      const located = locate && Array.isArray(locate.located) ? locate.located : [];
+      const refused = locate && Array.isArray(locate.refused) ? locate.refused : [];
+      const locatedByIndex = useMemo(() => new Map(located.map(x => [Number(x && x.index), x])), [located]);
+      const refusedByIndex = useMemo(() => new Map(refused.map(x => [Number(x && x.index), x])), [refused]);
+      const unsupportedCount = changes.filter(rcUnsupported).length;
+      const candidateRows = changes.map((c, i) => ({ change: c, index: i })).filter(r => r.change && r.change.type === 'candidate_change');
+      const unpairedRows = changes.map((c, i) => ({ change: c, index: i })).filter(r => r.change && r.change.type === 'unpaired');
+
+      // 写回闸门：必须「全部改动都定位唯一」。
+      // 只要有一组没定位、是未配对、或含变量/图片，就整体不给写——宁可不让点，
+      // 也不要让用户在半懂不懂的状态下按下去。
+      const gateReason = (() => {
+        if (!result) return '还没有比对结果';
+        if (!locate) return '比对结果里没有线上定位信息';
+        if (!locate.available) return '这次比对没有拿到线上节点快照，只能做 Word 对 Word 比对';
+        if (!changes.length) return '没有识别到任何改动';
+        if (refused.length) return '还有 ' + refused.length + ' 处改动无法唯一定位，需先人工核对';
+        if (located.length !== changes.length) return '不是所有改动都定位到了线上节点';
+        if (unsupportedCount) return '还有 ' + unsupportedCount + ' 处含变量或图片，这类段落不能写回';
+        return '';
+      })();
+      const canWriteback = gateReason === '';
+      const picked = useMemo(() => located.filter(x => checked.has(Number(x && x.index))), [located, checked]);
+      const pickedNodeCount = useMemo(() => {
+        const ids = new Set();
+        for (const x of picked) { const c = x && x.candidate; if (c && c.itemId != null) ids.add(String(c.itemId)); }
+        return ids.size;
+      }, [picked]);
+
+      const step = writeResult ? 4 : result ? 3 : (companyId && versions && versions.length) ? 2 : 1;
+
+      // 比对结果只活在当前页签的组件状态里：切走就没了，宿主也不会替我们保留。
+      // 所以「有结果、还没写回」这段窗口要让外层知道，切页前问一句，别让用户白比一场。
+      useEffect(() => {
+        if (onDirtyChange) onDirtyChange(!!(result && !writeResult));
+      }, [result, writeResult, onDirtyChange]);
+      useEffect(() => () => { if (onDirtyChange) onDirtyChange(false); }, [onDirtyChange]);
+
+      const resetComparison = () => {
+        setResult(null); setCompareToken(''); setWriteResult(null);
+        setChecked(new Set()); setConfirming(false); setBaselineInfo(null);
+        if (fileRef.current) fileRef.current.value = '';
+        setFile(null);
+      };
+      const pickProject = id => { if (id === projectId) return; setProjectId(id); };
+      const pickCompany = id => { if (id === companyId) return; setCompanyId(id); };
+      const pickType = id => { if (id === reportType) return; setReportType(id); };
+      const pickVersion = id => {
+        if (String(id) === String(attachId)) return;
+        setAttachId(String(id || ''));
+        // 换原版 = 换比对基准，已有结果作废。
+        resetComparison(); setError('');
+      };
+
+      const regenerate = async () => {
+        if (busy || !/^\d+$/.test(String(projectId || '')) || !/^\d+$/.test(String(companyId || ''))) return;
+        setBusy('build'); setError('');
+        const flag = { stop: false };
+        buildFlag.current = flag;
+        setBuildingMsg('提交生成任务…');
+        try {
+          // 重新生成：让线上按当前节点重新出一版稿，拿新版本当原版。
+          // 生成是天源后台的异步任务，这里轮询版本列表等它出现，不猜测耗时。
+          const before = new Set((versions || []).map(v => String(v.attachId)));
+          await requestJson('/ty/report-build', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectId, companyId, reportType }),
+          });
+          const t0 = Date.now();
+          let found = null;
+          while (Date.now() - t0 < 10 * 60 * 1000 && !flag.stop) {
+            setBuildingMsg('生成中… 已等 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
+            await rcSleep(6000);
+            if (flag.stop) break;
+            const q = '?projectId=' + encodeURIComponent(projectId)
+              + '&companyId=' + encodeURIComponent(companyId)
+              + '&reportType=' + encodeURIComponent(reportType);
+            const data = await requestJson('/ty/report-versions' + q, { cache: 'no-store' });
+            const list = Array.isArray(data.versions) ? data.versions : [];
+            const fresh = list.find(v => v && v.attachId && !before.has(String(v.attachId)));
+            if (fresh) { found = fresh; setVersions(list); setAttachId(String(fresh.attachId)); resetComparison(); break; }
+          }
+          if (!found && !flag.stop) setError('等待生成超时（10 分钟）。天源可能仍在出稿，稍后点「刷新」看看。');
+          else if (found) toast && toast('已生成 V' + String(found.version) + '，将用它当原版', 'ok');
+        } catch (e) { setError('重新生成失败：' + String(e.message || e)); }
+        finally { buildFlag.current = null; setBusy(''); setBuildingMsg(''); }
+      };
+
+      const compare = async () => {
+        if (!file || busy) return;
+        if (!/\.docx$/i.test(String(file.name || ''))) { setError('请选择 .docx 文件'); return; }
+        if (file.size > 32 * 1024 * 1024) { setError('文件不能超过 32 MB'); return; }
+        if (!/^\d+$/.test(String(companyId || ''))) { setError('先选公司和报告类型'); return; }
+        setBusy('compare'); setError(''); setResult(null); setWriteResult(null); setChecked(new Set()); setConfirming(false); setCompareToken('');
+        try {
+          const base64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error('读取文件失败'));
+            reader.onload = () => {
+              const text = String(reader.result || '');
+              const comma = text.indexOf(',');
+              if (comma < 0) reject(new Error('文件编码失败')); else resolve(text.slice(comma + 1));
+            };
+            reader.readAsDataURL(file);
+          });
+          const data = await requestJson('/ty/report-compare-live', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              projectId, companyId, reportType,
+              attachId: attachId ? String(attachId) : undefined,
+              filename: file.name, base64,
+            }),
+          });
+          if (!data.result || typeof data.result !== 'object') throw new Error('比对结果格式不正确');
+          if (!data.compareToken) throw new Error('宿主没有返回比对凭据，无法写回');
+          setResult(data.result);
+          setCompareToken(String(data.compareToken));
+          setBaselineInfo(data.baseline && typeof data.baseline === 'object' ? data.baseline : null);
+          toast && toast('比对完成：识别 ' + (Array.isArray(data.result.changes) ? data.result.changes.length : 0) + ' 组差异', 'ok');
+        } catch (e) { setError('比对失败：' + String(e.message || e)); }
+        finally { setBusy(''); }
+      };
+
+      const toggle = index => {
+        setChecked(prev => {
+          const next = new Set(prev);
+          const key = Number(index);
+          if (next.has(key)) next.delete(key); else next.add(key);
+          return next;
+        });
+        setConfirming(false);
+      };
+
+      const runWriteback = async () => {
+        if (!result || !locate || busy) return;
+        if (!picked.length) { setError('请先逐个勾选要写回的改动'); return; }
+        if (!compareToken) { setError('比对凭据已丢失，请重新比对一次'); return; }
+        setBusy('writeback'); setError('');
+        try {
+          // 只把勾选的这几条放进 located；refused 原样保留（写回只用 located，
+          // 但把 refused 抹空等于在请求里撒谎）。
+          const payload = { ...locate, located: picked };
+          const data = await requestJson('/ty/report-writeback-live', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: true, compareToken, projectId, locate: payload }),
+          });
+          if (!data.result || typeof data.result !== 'object') throw new Error('写回结果格式不正确');
+          setWriteResult(data.result);
+          setConfirming(false);
+          setChecked(new Set());
+          const failed = (data.result.failed || []).length;
+          toast && toast(failed ? ('写回完成，但有 ' + failed + ' 处失败') : '已写回线上', failed ? 'warn' : 'ok');
+        } catch (e) { setError('写回失败：' + String(e.message || e)); }
+        finally { setBusy(''); }
+      };
+
+      const exportCsv = () => {
+        if (!result) return;
+        const quote = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+        const head = ['序号', '类型', '状态', '线上节点', '段落号', '原文', '改后', '说明'];
+        const lines = [head.map(quote).join(',')];
+        changes.forEach((c, i) => {
+          const isCandidate = c && c.type === 'candidate_change';
+          const hit = locatedByIndex.get(i);
+          const miss = refusedByIndex.get(i);
+          const status = hit ? '可唯一定位' : (rcUnsupported(c) ? '含变量/图片，不可写回' : '需人工核对');
+          const itemId = hit && hit.candidate ? String(hit.candidate.itemId) : '';
+          const blockIndex = hit && hit.candidate && hit.candidate.blockIndex != null ? String(hit.candidate.blockIndex) : '';
+          const original = isCandidate ? String((c.baseline && c.baseline.text) || '') : (Array.isArray(c.baseline) ? c.baseline.map(x => String((x && x.text) || '')).join(' / ') : '');
+          const modified = isCandidate ? String((c.modified && c.modified.text) || '') : (Array.isArray(c.modified) ? c.modified.map(x => String((x && x.text) || '')).join(' / ') : '');
+          const note = hit ? '' : String((miss && miss.reason) || (isCandidate ? '' : '未配对'));
+          lines.push([i + 1, isCandidate ? '候选修改' : '未配对内容', status, itemId, blockIndex, original, modified, note].map(quote).join(','));
+        });
+        const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '报告差异清单-' + (companyName || companyId || 'report') + '-' + todayStr() + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      };
+
+      const stepsBar = h('div', { className: 'rc-steps' }, RC_STEPS.map((label, i) => {
+        const n = i + 1;
+        return h('div', { key: label, style: { display: 'flex', alignItems: 'center' } },
+          i > 0 ? h('span', { className: 'rc-step-sep' }) : null,
+          h('div', { className: 'rc-step' + (step === n ? ' on' : step > n ? ' done' : '') },
+            h('span', { className: 'rc-step-n' }, step > n ? '✓' : String(n)), label));
+      }));
+
+      const kpiCard = (value, label, sub) => h('div', { className: 'wb-card' },
+        h('div', { className: 'wb-kpi' }, String(value)), h('div', { className: 'wb-kpi-sub' }, label), sub ? h('div', { className: 'wb-hint' }, sub) : null);
+
+      const sumCard = result ? h('div', { className: 'wb-grid', style: { marginBottom: 12 } },
+        kpiCard(changes.length, '识别改动', 'Word 与线上原版之间'),
+        kpiCard(locate && locate.counts ? locate.counts.located : 0, '可唯一定位', '能落到具体节点段落'),
+        kpiCard(locate && locate.counts ? locate.counts.refused : 0, '需人工核对', '无法唯一确定位置'),
+        kpiCard(unsupportedCount, '含变量 / 图片', '不可写回，仅提示')) : null;
+
+      const cellOriginal = text => h('div', { className: 'rc-cell rc-del' }, rcShort(text, 400) || '（空）');
+      const cellModified = text => h('div', { className: 'rc-cell rc-add' }, rcShort(text, 400) || '（空）');
+
+      const candidateTable = result ? h(Table, {
+        cols: ['', '原（线上）', '改后（Word）', '线上位置'],
+        rows: candidateRows.length ? candidateRows.map(({ change, index }) => {
+          const hit = locatedByIndex.get(index);
+          const miss = refusedByIndex.get(index);
+          const blockable = !!hit && !rcUnsupported(change);
+          const disabled = !canWriteback || !blockable;
+          const pos = hit && hit.candidate
+            ? h('div', null,
+              h('div', { className: 'rc-pos' }, '节点 ' + String(hit.candidate.itemId)),
+              h('div', { className: 'rc-pos' }, '第 ' + (Number(hit.candidate.blockIndex) + 1) + ' 段' + (hit.matchedBy === 'stripped numbering prefix' ? '（去序号匹配）' : '')))
+            : h('div', null,
+              h('span', { className: 'wb-tag warn' }, rcUnsupported(change) ? '不可写回' : '需人工核对'),
+              h('div', { className: 'wb-hint', style: { marginTop: 2 } }, rcShort((miss && miss.reason) || '未定位到线上节点', 60)));
+          return h('tr', { key: index, className: disabled && !hit ? 'rc-dim' : '', style: rcUnsupported(change) ? { opacity: 0.5 } : null },
+            h('td', null, h('input', {
+              type: 'checkbox', checked: checked.has(index), disabled,
+              title: disabled ? (canWriteback ? '含变量或图片，不能写回' : gateReason) : '勾选后才写回这一处',
+              onChange: () => toggle(index),
+            })),
+            h('td', null, cellOriginal(change.baseline && change.baseline.text)),
+            h('td', null, cellModified(change.modified && change.modified.text)),
+            h('td', null, pos));
+        }) : [],
+      }) : null;
+
+      const unpairedTable = result && unpairedRows.length ? h(Table, {
+        cols: ['', '线上原版', '修改后', '说明'],
+        rows: unpairedRows.map(({ change, index }) => {
+          const left = Array.isArray(change.baseline) ? change.baseline : [];
+          const right = Array.isArray(change.modified) ? change.modified : [];
+          return h('tr', { key: 'u' + index, style: { opacity: 0.75 } },
+            h('td', null, h('input', { type: 'checkbox', disabled: true, checked: false, title: '未配对内容不能写回' })),
+            h('td', null, h('div', { className: 'rc-cell rc-del' }, left.length ? left.slice(0, 6).map((x, i) => h('div', { key: i }, rcShort((x && x.text) || '（空）', 300))) : '（无）')),
+            h('td', null, h('div', { className: 'rc-cell rc-add' }, right.length ? right.slice(0, 6).map((x, i) => h('div', { key: i }, rcShort((x && x.text) || '（空）', 300))) : '（无）')),
+            h('td', null, h('span', { className: 'wb-tag ' + (rcUnsupported(change) ? 'red' : 'warn') }, rcUnsupported(change) ? '含变量 / 图片' : '未配对'),
+              h('div', { className: 'wb-hint', style: { marginTop: 2 } }, '重复、结构变化或不支持对象，需人工核对')));
+        }),
+      }) : null;
+
+      const writePanel = result && locate ? h('div', { className: 'wb-sec', style: { marginTop: 14 } },
+        h('div', { className: 'wb-sec-h' }, h('h2', null, '写回线上'),
+          h('span', { className: 'wb-tag ' + (canWriteback ? 'green' : 'grey') }, canWriteback ? '可以写回' : '暂不可写回')),
+        // 四条限制写在按钮上方，不藏在弹窗里——用户按下去之前就该看见代价。
+        h('div', { className: 'wb-alert', style: { display: 'block' } },
+          h('div', { className: 't' }, '写回前请先知道这几条'),
+          h('div', { className: 'b', style: { marginTop: 4 } },
+            (Array.isArray(locate.writeChannel && locate.writeChannel.blocking) && locate.writeChannel.blocking.length
+              ? locate.writeChannel.blocking
+              : ['写回是整节点覆盖：这一处改动会连带把该节点其余段落重写一次。', '写前会重新抓线上节点树核对哈希；期间有人改过就中止。', '含变量、图片或附件的节点不写；这类节点替换整段会丢结构。']
+            ).map((b, i) => h('div', { key: i, style: { marginLeft: 2 } }, (i + 1) + '. ' + b)),
+            h('div', { style: { marginTop: 6 } }, '4. 写回只动「已勾选且定位唯一」的节点；每次一个节点整段保存，写后逐字核对。'))),
+        gateReason ? h('div', { className: 'wb-alert warn' }, h('div', { className: 't' }, gateReason),
+          h('div', { className: 'b' }, '未配对内容与含变量/图片的段落只能人工去网页上改；这里不提供一键全选。')) : null,
+        canWriteback ? h('div', { style: { marginTop: 8 } },
+          h('div', { className: 'wb-hint', style: { marginBottom: 8 } },
+            '已勾选 ' + picked.length + ' 处，覆盖 ' + pickedNodeCount + ' 个节点。' +
+            '（必须逐条勾选；不做一键全选写回。）'),
+          confirming
+            ? h('div', null,
+              h('div', { className: 'wb-alert danger' },
+                h('div', { className: 't' }, '确认写回：' + picked.length + ' 处 / 覆盖 ' + pickedNodeCount + ' 个节点'),
+                h('div', { className: 'b' }, '确认后会立刻覆盖这些节点当前的正文内容。写前会核对线上节点树哈希，期间被人改过就整体中止，不会覆盖别人的改动。')),
+              h('div', { className: 'wb-row' },
+                h(Btn, { className: 'sm', disabled: busy === 'writeback', onClick: () => setConfirming(false) }, '取消'),
+                h(Btn, { variant: 'danger', className: 'sm', disabled: busy === 'writeback', onClick: runWriteback },
+                  busy === 'writeback' ? '写回中…' : '确认写回 ' + picked.length + ' 处')))
+            : null) : null,
+        writeResult ? h('div', { style: { marginTop: 8 } },
+          h('b', null, '写回结果'),
+          h('div', { className: 'wb-hint', style: { marginBottom: 6 } },
+            '已写 ' + (writeResult.applied || []).length + ' 处，跳过 ' + (writeResult.skipped || []).length + ' 处，失败 ' + (writeResult.failed || []).length + ' 处。'),
+          (writeResult.applied || []).map((a, i) => h('div', { key: 'a' + i, className: 'rc-result ok' },
+            h('span', null, '已写'), h('span', { className: 'id' }, '节点 ' + String(a.itemId) + ' · 第 ' + (Number(a.blockIndex) + 1) + ' 段'),
+            h('span', null, rcShort(a.written, 60)))),
+          (writeResult.skipped || []).map((k, i) => h('div', { key: 's' + i, className: 'rc-result skip' },
+            h('span', null, '跳过'), h('span', { className: 'id' }, '节点 ' + String(k.itemId || '—') + (k.blockIndex != null ? ' · 第 ' + (Number(k.blockIndex) + 1) + ' 段' : '')),
+            h('span', null, String(k.reason || '未知原因')))),
+          (writeResult.failed || []).map((f, i) => h('div', { key: 'f' + i, className: 'rc-result fail' },
+            h('span', null, '失败'), h('span', { className: 'id' }, '节点 ' + String(f.itemId || '—') + (f.blockIndex != null ? ' · 第 ' + (Number(f.blockIndex) + 1) + ' 段' : '')),
+            h('span', null, String(f.reason || '未知原因'))))) : null,
+        h('p', { className: 'wb-hint', style: { marginTop: 6 } },
+          '写回通道：' + String((locate.writeChannel && locate.writeChannel.endpoint) || 'POST /ty/api/report/config/item/content/save') +
+          '；写前 acquire 该节点编辑锁，写后 release。')) : null;
+
+      const versionCards = !projectId ? null
+        : !companyId ? h('div', { className: 'wb-hint' }, '先选公司和报告类型。')
+        : versions === null ? h('div', { className: 'wb-hint' }, '正在读取线上版本…')
+        : !versions.length ? h('div', { className: 'wb-hint' }, '这个公司还没有已生成的「' + typeName + '」。点上面的「重新生成」让天源出一版；如果线上明明有稿子，点「刷新」重读一次。')
+        : versions.map((v, i) => {
+          const id = String(v.attachId);
+          const on = id === String(attachId || (versions[0] && String(versions[0].attachId)));
+          return h('div', {
+            key: id, className: 'rc-base' + (on ? ' on' : ''),
+            onClick: () => { if (!busy) pickVersion(id); },
+          },
+            h('div', { className: 'rc-base-h' },
+              h('div', { className: 'rc-base-t' }, 'V' + String(v.version)),
+              i === 0 ? h('span', { className: 'wb-tag green' }, '最新') : h('span', { className: 'wb-tag grey' }, '旧版')),
+            h('div', { className: 'rc-base-m' },
+              h('span', { className: 'wb-tag grey' }, typeName),
+              v.creator ? h('span', { className: 'wb-tag grey' }, rcShort(v.creator, 8)) : null),
+            h('div', { className: 'rc-base-f' },
+              h('span', null, rcWhen(v.updatedAt)),
+              h('span', null, on ? '已选为原版' : '点选作为原版')));
+        });
+
+      const sideBar = h('div', { className: 'rc-side' },
+        h('div', null,
+          h('span', { className: 'wb-label' }, '项目'),
+          cachedProjects.length
+            ? h(Sel, { value: projectId, disabled: !!busy, onChange: e => pickProject(e.target.value), style: { width: '100%' } },
+              cachedProjects.filter(p => p && /^\d+$/.test(String(p.id == null ? '' : p.id))).map(p => h('option', { key: String(p.id), value: String(p.id) },
+                rcShort(p.projectName || p.projectCode || String(p.id), 24))))
+            : h('div', { className: 'wb-hint' }, '本地还没有项目缓存，请先到「工作」页签同步天源项目。')),
+        h('div', null,
+          h('span', { className: 'wb-label' }, '公司'),
+          companies === null
+            ? h('div', { className: 'wb-hint' }, projectId ? '正在读取公司…' : '先选项目。')
+            : !companies.length
+              ? h('div', { className: 'wb-hint' }, '这个项目没有可用的被评估公司。')
+              : h(Sel, { value: companyId, disabled: !!busy, onChange: e => pickCompany(e.target.value), style: { width: '100%' } },
+                h('option', { value: '' }, '— 选择公司 —'),
+                companies.map(c => h('option', { key: c.id, value: c.id }, rcShort(c.name, 22))))),
+        h('div', null,
+          h('span', { className: 'wb-label' }, '报告类型'),
+          companyId && typesKnown && availableTypes && !availableTypes.length
+            // 这家公司在天源报告系统里连类型都没建：说清楚，不要给一个假的空列表。
+            ? h('div', { className: 'wb-hint', style: { padding: '6px 0' } },
+              '这家公司在天源里还没有配置任何报告类型，所以没有线上稿可比。需要先在天源网页给这家公司建报告，再回来比对。')
+            : h(Sel, { value: reportType, disabled: !!busy || !typeOptions.length, onChange: e => pickType(e.target.value), style: { width: '100%' } },
+              typeOptions.map(t => h('option', { key: t.v, value: t.v }, t.n)))),
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 } },
+          h('span', { className: 'wb-label', style: { margin: 0 } }, '线上版本' + (versions ? '（' + versions.length + '）' : '')),
+          h('div', { style: { display: 'flex', gap: 4 } },
+            h(Btn, { className: 'sm', disabled: !!busy || !companyId, onClick: loadVersions },
+              busy === 'versions' ? '读取中…' : '刷新'),
+            h(Btn, { className: 'sm', disabled: !!busy || !companyId || (typesKnown && availableTypes && !availableTypes.length), onClick: regenerate, title: '让天源按当前节点重新出一版稿，约 1-3 分钟' },
+              busy === 'build' ? '生成中…' : '重新生成'))),
+        buildingMsg ? h('div', { className: 'wb-alert', style: { display: 'block' } }, h('div', { className: 'b' }, buildingMsg)) : null,
+        versionCards,
+        h('p', { className: 'wb-hint', style: { margin: 0 } }, '原版就是你选中的那一版线上报告的 Word 稿；不选则默认用最新版。'),
+      );
+
+      const uploadBar = h('div', { className: 'wb-sec' },
+        h('div', { className: 'wb-sec-h' }, h('h2', null, '上传改稿'),
+          companyId ? h('span', { className: 'wb-tag' }, rcShort(companyName + ' · ' + typeName, 24)) : null),
+        h('p', { className: 'wb-hint' }, '选你在 Word 里改过的那份 .docx（最大 32 MB）。原版由系统当场从线上取，不需要你事先导出。'),
+        h('div', { className: 'wb-row', style: { flexWrap: 'wrap', gap: 8 } },
+          h('input', {
+            ref: fileRef, type: 'file', disabled: !!busy || !companyId,
+            accept: '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            onChange: e => { setFile((e.target.files && e.target.files[0]) || null); setResult(null); setCompareToken(''); setWriteResult(null); setChecked(new Set()); setConfirming(false); setBaselineInfo(null); setError(''); },
+          }),
+          h(Btn, { disabled: !!busy || !companyId || !file, onClick: compare, variant: file && !result ? 'pri' : '' },
+            busy === 'compare' ? '比对中…' : '开始比对'),
+          file ? h('span', { className: 'wb-hint' }, file.name + ' · ' + rcSize(file.size)) : null),
+        baselineInfo ? h('div', { className: 'wb-hint', style: { marginTop: 6 } },
+          '原版：' + (baselineInfo.companyName ? baselineInfo.companyName + ' · ' : '') + 'V' + String(baselineInfo.version || '?')
+          + '（attachId ' + String(baselineInfo.attachId || '?') + '）') : null,
+        !companyId ? h('div', { className: 'wb-hint' }, '先在左边选公司和报告类型。') : null);
+
+      const footBar = result ? h('div', { className: 'rc-foot' },
+        h('span', { className: 'wb-hint' }, '共 ' + changes.length + ' 组差异'),
+        h('span', { className: 'rc-foot-sp' }),
+        h(Btn, { className: 'sm', onClick: exportCsv }, '导出差异清单'),
+        h(Btn, {
+          variant: canWriteback && picked.length ? 'danger' : '',
+          className: 'sm',
+          disabled: !!busy || !canWriteback || !picked.length || confirming,
+          title: canWriteback ? (picked.length ? '' : '先逐条勾选要写回的改动') : gateReason,
+          onClick: () => setConfirming(true),
+        }, '写回线上（' + (canWriteback ? picked.length : 0) + ' 处）'),
+        writeResult ? h(Btn, { className: 'sm', onClick: () => { resetComparison(); setError(''); } }, '重新开始') : null) : null;
+
+      const warnings = result ? [...new Set([
+        ...(result.baseline && Array.isArray(result.baseline.warnings) ? result.baseline.warnings : []),
+        ...(result.modified && Array.isArray(result.modified.warnings) ? result.modified.warnings : []),
+      ])] : [];
+
+      return h('div', null,
+        h('p', { className: 'wb-hint', style: { marginTop: 0 } },
+          '把你在 Word 里线下改过的报告丢进来，系统自动取线上那一版当原版，比对出文字差异并定位到天源报告节点，再逐条写回——不用先在网页上重敲一遍，也不用事先导出。'),
+        h('div', { className: 'rc-split' },
+          sideBar,
+          h('div', null,
+            stepsBar,
+            error ? h('div', { className: 'wb-alert danger' },
+              h('div', { className: 't' }, error),
+              h('div', { className: 'b' }, '登录态由你自己的 Chrome 提供（不复制、不导出 Cookie）。在浏览器里登录天源之后，点左边「线上版本」右侧的「刷新」即可重新读取；改动了公司或报告类型也会自动重读。')) : null,
+            uploadBar,
+            sumCard,
+            result ? h('div', { className: 'wb-sec' },
+              h('div', { className: 'wb-sec-h' }, h('h2', null, '候选修改'), h('span', { className: 'wb-tag grey' }, candidateRows.length + ' 组')),
+              h('p', { className: 'wb-hint' }, '左列勾选框只对「定位唯一且不含变量/图片」的行开放。红色的原句来自线上原版，绿色的改后来自你的 Word；线上位置是本系统认定的对应节点与段落号（段落号从第 1 段起）。'),
+              candidateRows.length ? candidateTable : h('div', { className: 'wb-empty' }, '没有候选修改')) : null,
+            unpairedTable ? h('div', { className: 'wb-sec' },
+              h('div', { className: 'wb-sec-h' }, h('h2', null, '未配对内容'), h('span', { className: 'wb-tag warn' }, '不能写回')),
+              h('p', { className: 'wb-hint' }, '这些段落无法可靠配对（重复、结构变化或含变量/图片/附件）。它们不能写回，但必须让你看见——否则你会以为差异只有上面那几行。'),
+              unpairedTable) : null,
+            warnings.length ? h('div', { className: 'wb-alert warn', style: { display: 'block' } },
+              h('div', { className: 't' }, '比对范围限制'),
+              h('div', { className: 'b' }, warnings.map((w, i) => h('div', { key: i }, '· ' + (RC_WARNING_LABELS[w] || rcShort(w, 200))))),
+              Number(result.unsupportedUnchanged) > 0
+                ? h('div', { className: 'b' }, '· 另有 ' + String(result.unsupportedUnchanged) + ' 处含公式或图片的段落文字未变，未做逐字节比较。') : null) : null,
+            writePanel,
+            footBar,
+          )),
+      );
+    }
+
     function WorkbenchPage() {
       const s = useStore();
       const [toastMsg, setToastMsg] = useState(null);
       const [reportDirty, setReportDirty] = useState(false);
+      const [compareDirty, setCompareDirty] = useState(false);
       const [sub, setSub] = useState({ work: 'projects', study: 'plans', stock: '' });
       // 浮动对话窗的开关。放在 WorkbenchPage 里而不是模块级，是为了跟随页签切换保留、
       // 又能在离开工作台面板时自动卸载（组件树销毁即关闭，不留幽灵浮层）。
       const [dockOpen, setDockOpen] = useState(false);
       // 页签精简（2026-11-18）：只保留 工作/文件库/设置。历史存档里的旧 activeTab
       // （overview/study/stock/alerts）一律回落到 work，避免渲染无页签高亮的孤儿页。
-      const KEPT = ['work', 'assistant', 'library', 'report-format', 'data-tools', 'land-market', 'settings'];
+      const KEPT = ['work', 'assistant', 'library', 'report-format', 'report-compare', 'data-tools', 'land-market', 'settings'];
       const tab = KEPT.includes(s.settings.activeTab) ? s.settings.activeTab : 'work';
       // 提示条：后一条提示必须顶掉前一条**连同它的定时器** —— 否则 3.2 秒前那条提示的
       // 定时器会把刚弹出的新提示提前清掉（保存 = 停在表单后连着点几下就能撞上）。
@@ -8276,6 +9319,10 @@ window.__ModuleLoader__.load({
       const go = (t, sb) => {
         if (tab === 'report-format' && t !== tab && reportDirty && !confirm('报告格式有未保存或未确认的修改，离开将丢失草稿，继续吗？')) return;
         if (tab === 'report-format' && t !== tab) setReportDirty(false);
+        if (tab === 'report-compare' && t !== tab) {
+          if (compareDirty && !confirm('报告比对的差异结果还没写回，离开将丢失这次比对，继续吗？')) return;
+          setCompareDirty(false);
+        }
         patch('settings', x => ({ ...x, activeTab: t })); if (sb) setSub({ ...sub, [t]: sb });
       };
 
@@ -8392,7 +9439,7 @@ window.__ModuleLoader__.load({
       const unread = s.alerts.filter(a => !a.read).length;
       // 页签精简（2026-11-18）：只保留 工作/文件库/设置；想恢复全部页签，
       // 用同目录 client.js.bak-fulltabs-* 覆盖回来，或把下面数组换回七项。
-      const tabs = [['work', '工作'], ['assistant', '助手'], ['library', '文件库'], ['report-format', '报告格式'], ['data-tools', '数据工具'], ['land-market', '土地市场法'], ['settings', '设置']];
+      const tabs = [['work', '工作'], ['assistant', '助手'], ['library', '文件库'], ['report-format', '报告格式'], ['report-compare', '报告比对'], ['data-tools', '数据工具'], ['land-market', '土地市场法'], ['settings', '设置']];
       return h('div', { className: 'wb-root' }, h(StyleTag, null), h('div', { className: 'wb-wrap' },
         h('h1', { className: 'wb-h1' }, '个人工作台'),
         h('p', { className: 'wb-sub' }, '资产评估项目管理 — ' + todayStr()),
@@ -8402,6 +9449,7 @@ window.__ModuleLoader__.load({
           tab === 'assistant' ? h(AssistantPanel, { toast, onOpenDock: () => setDockOpen(true) }) :
           tab === 'library' ? h(LibraryPanel, { toast }) :
           tab === 'report-format' ? h(ReportFormat, { toast, onDirtyChange: setReportDirty }) :
+          tab === 'report-compare' ? h(ReportComparePage, { s, toast, onDirtyChange: setCompareDirty }) :
           tab === 'data-tools' ? h(DataTools, { toast }) :
           tab === 'land-market' ? h(LandMarketPanel) :
           tab === 'study' ? h(Study, { s, sub: sub.study, toast, go }) :

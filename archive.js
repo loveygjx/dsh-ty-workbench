@@ -90,18 +90,25 @@ export async function preview(input) {
   const opts = input || {};
   const folder = safeFolderName(opts.folder);
   const legacy = safeFolderName(opts.legacy);
-  if (!folder && !legacy) return { ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' };
+  const absBound = String(opts.abs || '').trim();
+  if (!folder && !legacy && !absBound) return { ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' };
 
-  // 新名字（编号 简称）优先，其次老的「年份 项目名」目录；两者都找不到才算没有
+  // 绑定的绝对路径最优先；其次新名字（编号 简称），再次老的「年份 项目名」目录；都没有才算没有
   let src = null;
-  for (const name of [folder, legacy].filter(Boolean)) {
-    src = await store.findProjectDir(name);
-    if (src) break;
+  if (absBound) {
+    const bound = await store.describeFolder(absBound, false);
+    if (bound && bound.ok) src = { path: bound.path, root: bound.root, name: bound.name };
+  }
+  if (!src) {
+    for (const name of [folder, legacy].filter(Boolean)) {
+      src = await store.findProjectDir(name);
+      if (src) break;
+    }
   }
   if (!src) {
     return {
       ok: false, notFound: true,
-      error: '没有找到项目文件夹「' + (folder || legacy) + '」：它可能已经归档，或目录被手工移走了。'
+      error: '没有找到项目文件夹「' + (absBound || folder || legacy) + '」：它可能已经归档，或目录被手工移走了。'
         + '可以在「文件库」里搜索确认。',
     };
   }

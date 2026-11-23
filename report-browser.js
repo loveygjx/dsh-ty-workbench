@@ -519,7 +519,22 @@ export async function listCompanies(projectId, { bin, onLog } = {}) {
   return withBridgeRecovery(() => listCompaniesOnce(projectId, { bin }), { bin, onLog });
 }
 
-async function listCompaniesOnce(projectId, { bin } = {}) {
+/**
+ * 列出项目下所有被评估公司**以及每家在报告系统里配置了哪些报告类型**。
+ *
+ * 与 listCompanies 的区别：不过滤 types 为空的公司。
+ * 「报告比对」要知道某公司有没有配「评估报告」这个类型——没配就该在界面上
+ * 说清楚，而不是让用户对着一个必然失败的类型去点「重新生成」。
+ *
+ * 数据来源是 /ty/api/company/list 的 reportConfigList，这是天源报告系统
+ * 自己的配置表，比 report/project 列表更权威：列表为空可能是没生成，
+ * 配置为空则是这个类型压根没建。
+ */
+export async function listCompanyTypes(projectId, { bin, onLog } = {}) {
+  return withBridgeRecovery(() => listCompaniesOnce(projectId, { bin, keepEmpty: true }), { bin, onLog });
+}
+
+async function listCompaniesOnce(projectId, { bin, keepEmpty = false } = {}) {
   await prepare(projectId, { bin });
   const expr = pageExpr(`
     const res = await __api("/ty/api/company/list", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({projectId: ${JSON.stringify(String(projectId))}})});
@@ -542,5 +557,5 @@ async function listCompaniesOnce(projectId, { bin } = {}) {
     }
     throw new Error('公司列表解析失败：' + String(raw).slice(0, 200));
   }
-  return arr.filter((c) => c.types.length > 0);
+  return keepEmpty ? arr : arr.filter((c) => c.types.length > 0);
 }

@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir, rename, stat, unlink, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname, isAbsolute } from 'node:path';
+import { join, dirname, isAbsolute, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { openShell } from './opener.js';
 
@@ -274,6 +274,32 @@ export async function projectDir(folder, create) {
   return { ok: true, path: target, root: projectsDir, name, existed: false, created: true };
 }
 
+// ---------- 绑定的项目目录（项目 ↔ 本地文件夹的强关联） ----------
+// 为什么需要这一层：上面的 findProjectDir 只认「项目目录根 + 名字」，
+// 但用户会把项目放在任意位置（比如 OneDrive 里的客户目录、D:\客户\某某项目），
+// 这种目录不在 00项目ing 下面，按名字永远找不到。绑定的路径记在这里，
+// 由前端在项目记录上存 folderPath，每次调用项目目录时带过来。
+export async function describeFolder(abs, create) {
+  const raw = String(abs == null ? '' : abs).trim().replace(/^"|"$/g, '');
+  if (!raw || !isAbsolute(raw)) return null;
+  const path = raw.replace(/[\\/]+$/, '') || raw;
+  const name = basename(path) || path;
+  const root = dirname(path) || path;
+  try {
+    const st = await stat(path);
+    if (!st.isDirectory()) return { ok: false, error: '这个路径不是文件夹：' + path, path, name, root };
+    return { ok: true, path, name, root, existed: true, created: false, bound: true };
+  } catch (e) {
+    if (create === false) return { ok: false, error: '目录不存在：' + path, path, name, root };
+    try {
+      await mkdir(path, { recursive: true });
+      return { ok: true, path, name, root, existed: false, created: true, bound: true };
+    } catch (e2) {
+      return { ok: false, error: '创建目录失败：' + (e2.message || e2), path, name, root };
+    }
+  }
+}
+
 /** 建出（或复用）项目文件夹，返回绝对路径；create=false 时只探测 */
 export async function projectFolder(year, name, create) {
   const folder = projectFolderName(year, name);
@@ -297,4 +323,5 @@ export default {
   config, info, setDir, setProjectsDir,
   readState, writeState, openDir, openProjectsDir,
   projectFolderName, projectRoots, findProjectDir, projectDir, projectFolder, openProjectFolder,
+  describeFolder,
 };
