@@ -47,10 +47,12 @@ export function validateReportFormat(config) {
   for (const name of fonts) if (name in config) {
     const f = config[name];
     const paraAllowed = name === 'body' || /^heading[1-4]$/.test(name);
-    object(f, name === 'table' ? ['font','size_half_points','ascii_font','min_row_height_twips','repeat_header','numeric_align_right','clear_shading','autofit','single_line','border'] : paraAllowed ? ['font','size_half_points','paragraph'] : ['font','size_half_points'], name);
+    object(f, name === 'table' ? ['font','size_half_points','ascii_font','min_row_height_twips','repeat_header','numeric_align_right','clear_shading','autofit','single_line','border'] : paraAllowed ? ['font','size_half_points','ascii_font','paragraph'] : ['font','size_half_points'], name);
     if ('font' in f) font(f.font, name + '.font');
     if ('size_half_points' in f) integer(f.size_half_points, 2, 3276, name + '.size_half_points');
     if (paraAllowed && 'paragraph' in f) validateParagraph(f.paragraph, name + '.paragraph');
+    // 正文/标题的西文字体（含数字）：留空表示跟随该类别的中文字体。
+    if (paraAllowed && 'ascii_font' in f) font(f.ascii_font, name + '.ascii_font');
     if (name !== 'table') continue;
     if ('ascii_font' in f) font(f.ascii_font, 'table.ascii_font');
     if ('min_row_height_twips' in f) integer(f.min_row_height_twips, 1, 31680, 'table.min_row_height_twips');

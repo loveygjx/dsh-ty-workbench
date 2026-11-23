@@ -1,6 +1,6 @@
 {
   "name": "@zer0_y/dsh-ty-workbench",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": false,
   "type": "module",
   "description": "个人工作台：资产评估项目管理与工时、考证学习规划与考试提醒、自选股行情与买卖点提醒",
@@ -57,7 +57,16 @@
     "equity_import.py",
     "finance_import.py",
     "folders.js",
-    "archive.js"
+    "archive.js",
+    "report-baseline.js",
+    "report-compare-service.js",
+    "report-node-mapper.js",
+    "report-online-snapshot.js",
+    "report-online-full.js",
+    "report-write-channel.js",
+    "report-writeback.js",
+    "report-diff.py",
+    "normalize_body_fonts.py"
   ],
   "dsh": {
     "manifestVersion": 1,

@@ -5,6 +5,7 @@ import { join, sep, dirname, relative, isAbsolute, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { openShell } from './opener.js';
 // 这里的内部 import 一律不带查询串：宿主插件模块一旦被 Cordis 求值就缓存，
 // 给其中一个加 ?v= 只会让 library.js 出现两份实例（scanner/kbqa 走的是另一份），
@@ -23,6 +24,11 @@ import * as scanner from './scanner.js';
 import * as store from './store.js';
 import { planProjectFolders } from './folders.js';
 import * as archive from './archive.js';
+import { archiveReportBaseline } from './report-baseline.js';
+import { listBaselines, compareUpload, compareAgainstLive, readManifestForWriteback } from './report-compare-service.js';
+import { applyWriteback, readContents } from './report-writeback.js';
+import { collectContentItemIds, FULL_CONTENT_CHUNK, MAX_FULL_ITEMS } from './report-online-full.js';
+import { buildOnlineSnapshot } from './report-online-snapshot.js';
 import { buildData as tySyncData, runSync as tySyncRun, resolveEgoBin, spawnEgoScript, openSyncSpace, runSyncBridge, bridgeReady } from './tysync.js';
 
 const name = 'workbench';
@@ -38,6 +44,36 @@ function rememberExportBatch(dir) {
 }
 // 导出进度快照：前端用随机 jobId 轮询，任务结束即删除。
 const exportProgress = new Map();
+
+// 「不导出基线」那条路的现场凭据。
+//
+// 比对时宿主当场抓了线上节点树，算出 astSha256；写回时必须拿同一个哈希核对并发。
+// 这个哈希绝不能由前端保管——前端传什么就等于让前端决定"线上没变过"。
+// 所以比对成功后在宿主内存里存一份，只把随机 token 发给前端，写回时凭 token 取回。
+// 15 分钟过期、最多留 20 条；过期后要么重新比对，要么走归档基线那条路。
+const liveCompareTokens = new Map();
+const LIVE_TOKEN_TTL_MS = 15 * 60 * 1000;
+const LIVE_TOKEN_MAX = 20;
+function putLiveToken(entry) {
+  if (liveCompareTokens.size >= LIVE_TOKEN_MAX) {
+    let oldestKey = null; let oldestAt = Infinity;
+    for (const [k, v] of liveCompareTokens) if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+    if (oldestKey) liveCompareTokens.delete(oldestKey);
+  }
+  const token = randomUUID();
+  liveCompareTokens.set(token, { at: Date.now(), ...entry });
+  return token;
+}
+function takeLiveToken(token, projectId) {
+  const key = String(token || '');
+  if (!/^[0-9a-f-]{36}$/.test(key)) throw new Error('比对凭据无效，请重新比对');
+  const entry = liveCompareTokens.get(key);
+  if (!entry) throw new Error('比对凭据已失效，请重新比对一次');
+  if (Date.now() - entry.at > LIVE_TOKEN_TTL_MS) { liveCompareTokens.delete(key); throw new Error('比对凭据已过期（15 分钟），请重新比对一次'); }
+  // 凭据绑定项目：A 项目的凭据不能拿去写 B 项目。
+  if (String(entry.projectId) !== String(projectId)) throw new Error('比对凭据与项目不匹配');
+  return entry;
+}
 
 // 用系统默认浏览器打开授权页。渲染进程里 window.open 会被 Electron 主窗口的
 // window-open 策略 deny（只对 https 调 shell.openExternal 且不返回窗口），
@@ -464,6 +500,189 @@ function toolboxRulesFromReportFormat(cfg) {
   return out;
 }
 
+/**
+ * 抓取导出时点的线上节点树，供基线归档使用。
+ * 只读、失败不影响导出：拿不到快照就是 `not_captured`，不猜、不补。
+ */
+async function captureOnlineNodes({ projectId, companyId, reportType }) {
+  const args = { projectId: String(projectId), companyId: String(companyId), reportType: Number(reportType) };
+  const res = await ty.callTool('export_report_full_json', args);
+  if (res && res.isError) throw new Error('读取线上节点失败：' + hostToolText(res).slice(0, 200));
+  const data = res && res.data;
+  if (!data || typeof data !== 'object') throw new Error('读取线上节点失败：返回为空');
+  return { document: data, capturedAt: new Date().toISOString() };
+}
+
+/**
+ * 用网页 content/batch 抓一遍节点的**完整版**正文（含 attrs/marks），供基线归档。
+ *
+ * 为什么必须走浏览器而不是 MCP：MCP 的 export_report_full_json 给的是精简版，
+ * 剥掉了 attrs 与 marks，拿它写回天源会直接报 content.attrs is null。
+ *
+ * 失败不抛到导出流程之外：拿不到完整版就把基线降级为「没有完整版」，
+ * 记录原因，绝不拿精简版冒充。返回 { items, capturedAt } 或抛错由调用侧捕获。
+ */
+async function captureOnlineFullNodes({ projectId, companyId, reportType, document }) {
+  const ids = collectContentItemIds(document);
+  if (!ids.length) throw new Error('线上节点里没有可抓取正文的内容节点');
+  if (ids.length > MAX_FULL_ITEMS) throw new Error('内容节点数量超过上限（' + ids.length + '），完整版快照未保存');
+  await rb.openTyHost(projectId);
+  const items = [];
+  for (let i = 0; i < ids.length; i += FULL_CONTENT_CHUNK) {
+    const chunk = ids.slice(i, i + FULL_CONTENT_CHUNK);
+    const rows = await readContents({ projectId, companyId, itemIds: chunk });
+    const byId = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row && row.itemId != null) byId.set(String(row.itemId), row);
+    }
+    for (const id of chunk) {
+      const row = byId.get(id);
+      // 缺一个就不存：残缺的完整版会让回溯时误以为原文就是这样。
+      if (!row || row.text == null) throw new Error('节点 ' + id + ' 没有返回正文，完整版快照未保存');
+      items.push({ itemId: id, itemType: row.itemType ?? null, text: row.text });
+    }
+  }
+  return { items, capturedAt: new Date().toISOString(), expectedItemCount: ids.length };
+}
+
+/**
+ * 天源会话的两个来源：宿主 Cookie 直调，或借用户浏览器的登录态。
+ *
+ * 为什么必须两条腿走路：tianyuan-session.js 的 cookie 只存在宿主进程内存里，
+ * 唯一注入点是 /ty/native/session（要求用户手粘 tk/sid），而工作台前端从来没调过它。
+ * 于是「用户在浏览器里明明登录了」这件事宿主并不知道，hasSession() 恒为 false。
+ * 用户不应该为了用这个模块再扫码一次——浏览器已经登着，就走浏览器通道。
+ */
+function hasHostSession() { return tySession.hasSession(); }
+
+/** 报告列表：优先宿主 Cookie，没有会话就走浏览器。 */
+async function liveListReports(projectId) {
+  if (hasHostSession()) {
+    try {
+      return await tySession.listReports(String(projectId));
+    } catch (e) {
+      // 宿主 cookie 可能已过期：清掉后继续用浏览器通道，不把用户挡在门外。
+      if (!e || e.code !== 'UNAUTHENTICATED') throw e;
+      tySession.clearSession();
+    }
+  }
+  const rows = await rb.listReports(String(projectId));
+  return rows.map(r => ({
+    ...r,
+    version: Number(r.version) || 0,
+    attachId: r.attachId ? String(r.attachId) : null,
+    updatedAt: r.updatedAt || '',
+    creator: r.creator || '',
+  }));
+}
+
+/** 提交生成任务：同样两条腿。返回 jobId（可能为空，调用方只用来提示）。 */
+async function liveBuildReport(projectId, companyId, reportType) {
+  if (hasHostSession()) {
+    try {
+      const out = await tySession.buildReport(String(projectId), String(companyId), Number(reportType));
+      return out && out.jobId;
+    } catch (e) {
+      if (!e || e.code !== 'UNAUTHENTICATED') throw e;
+      tySession.clearSession();
+    }
+  }
+  return rb.buildReport(String(projectId), String(companyId), Number(reportType));
+}
+
+/** 下载附件原始字节：rb 返回 base64，宿主 cookie 返回 Buffer，这里统一成 Buffer。 */
+async function liveDownloadDocx(attachId) {
+  if (hasHostSession()) {
+    try {
+      const { buf } = await tySession.downloadAttachmentRaw(String(attachId));
+      const chk = await tySession.validateDocx(buf);
+      if (!chk.ok) throw new Error('下载文件校验失败：' + chk.reason);
+      return buf;
+    } catch (e) {
+      if (!e || e.code !== 'UNAUTHENTICATED') throw e;
+      tySession.clearSession();
+    }
+  }
+  const out = await rb.downloadAttachment(String(attachId));
+  const buf = Buffer.from(out.base64, 'base64');
+  const chk = await tySession.validateDocx(buf);
+  if (!chk.ok) throw new Error('下载文件校验失败：' + chk.reason);
+  return buf;
+}
+
+/**
+ * 把浏览器通道的错误翻成用户可以照着做的话。
+ *
+ * rb.* 抛的是 NOT_LOGGED_IN / BRIDGE_DISCONNECTED / NO_OPENCLI 这类机器码，
+ * 直接丢给界面等于又是一句看不懂的提示。
+ */
+function explainBrowserError(e) {
+  const code = (e && (e.code || e.message)) || '';
+  const detail = (e && e.detail) ? String(e.detail).slice(0, 160) : '';
+  const tail = detail ? '（' + detail + '）' : '';
+  if (code === 'NOT_LOGGED_IN') {
+    return '浏览器里的天源登录态读不到' + tail + '：请先在 Chrome 打开天源并确认已登录，再点「刷新」重读。';
+  }
+  if (code === 'BRIDGE_DISCONNECTED') return '连不上浏览器扩展（自动重连也失败了）：请确认 Chrome 正在运行、OpenCLI 扩展已启用，然后点「刷新」重试。';
+  if (code === 'NO_OPENCLI') return '没找到 opencli（浏览器通道）：请安装 opencli，或在「设置」里配置宿主侧的 tk/sid 登录。';
+  return '';
+}
+
+/**
+ * 取「线上当前版本」的 DOCX 原始字节，用于不依赖归档基线的比对。
+ *
+ * attachId 可以来自用户在列表里的选择（旧版），也可以为空表示「取最新已生成版本」。
+ * 不允许前端传任意 attachId 去下载别的东西：这里只接受 /^\d+$/ 的 attachId，
+ * 且必须能在该项目该公司的报告列表里查到——否则就是绕开列表乱下载。
+ */
+async function fetchLiveReportDocx({ projectId, companyId, reportType, attachId }) {
+  const rows = await liveListReports(projectId);
+  const mine = rows.filter(r => String(r.companyId) === String(companyId)
+    && Number(r.type) === Number(reportType)
+    && r.attachId
+    && Number(r.jobState) === 2);
+  if (!mine.length) {
+    const label = { 1: '评估报告', 2: '评估说明', 3: '长投说明' }[Number(reportType)] || '报告';
+    throw new Error('线上还没有已生成的' + label + '（可能从未生成，请先在天源网页生成一次）');
+  }
+  let target = null;
+  if (attachId != null && String(attachId) !== '') {
+    // 用户选了某一版：必须在该公司该类型列表里，防止拿别人的 attachId 下载。
+    target = mine.find(r => String(r.attachId) === String(attachId)) || null;
+    if (!target) throw new Error('选择的版本不在该公司的报告列表里，已拒绝下载');
+  } else {
+    mine.sort((a, b) => Number(b.version) - Number(a.version));
+    target = mine[0];
+  }
+  const buf = await liveDownloadDocx(target.attachId);
+  return { buf, version: target.version, attachId: target.attachId, companyName: target.companyName || '' };
+}
+
+/**
+ * 比对用的线上现场快照：节点树（定位用）+ 完整版正文（写回用）。
+ *
+ * 两者必须同批抓取，否则用户勾选写回时 astSha256 校验会误判"线上已变化"。
+ */
+async function captureLiveSnapshot({ projectId, companyId, reportType }) {
+  const online = await captureOnlineNodes({ projectId, companyId, reportType });
+  // 必须用 buildOnlineSnapshot 生成快照：定位器要的是 {identity, itemList}，
+  // 直接塞原始导出（{basicInfo, itemList}）会因为查不到 identity 而全部拒定位。
+  //
+  // 这里不抓 content/batch 完整版：写回时 applyWriteback 会为每个节点重新读一次
+  // 完整正文，比对阶段抓了也用不上，只会白白多几十个浏览器往返。
+  const built = buildOnlineSnapshot({
+    document: online.document,
+    expected: { projectId, companyId, reportType },
+    capturedAt: online.capturedAt,
+  });
+  return {
+    online: built,          // { snapshot, evidence }
+    astSha256: built.evidence.astSha256,
+    itemCount: built.evidence.itemCount,
+    capturedAt: online.capturedAt,
+  };
+}
+
 async function applyDocxTableFormat(file) {
   const tbx = toolboxTableFormatScript();
   if (!tbx) throw new Error('没有找到「评估工具箱」的表格设置脚本 format_word_tables.py');
@@ -498,8 +717,46 @@ async function applyDocxTableFormat(file) {
         cells: saved.clearedShadingCells || 0,
         skippedAttachment: saved.skippedAttachmentTables || 0,
         skippedFormatted: saved.skippedFormattedTables || 0,
+        clearedSummaryValues: saved.clearedSummaryValues || 0,
+        reflowedUniformGrids: saved.reflowedUniformGrids || 0,
+        repairedHeaderRows: saved.repairedHeaderRows || 0,
         rules,
       };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('没有可用的 python（需要 python-docx 与 lxml）');
+}
+
+// 正文西文字体归一：让正文里的数字不再落到 Times New Roman / Calibri。
+// 只改 body 直接子段落，表格与页眉页脚一律不碰（表格的字体由表格设置自己管）。
+async function applyBodyFontNormalize(file) {
+  const script = join(dirname(fileURLToPath(import.meta.url)), 'normalize_body_fonts.py');
+  if (!existsSync(script)) throw new Error('没有找到正文字体脚本 normalize_body_fonts.py');
+  let cfg = {};
+  try {
+    const { readReportFormat } = await import('./report-format.js');
+    const cur = await readReportFormat();
+    const body = (cur && cur.body) || {};
+    cfg = { asciiFont: body.ascii_font || body.font || '宋体', eastAsiaFont: body.font || '宋体' };
+  } catch (e) { cfg = { asciiFont: '宋体', eastAsiaFont: '宋体' }; }
+  const env = { ...process.env, PYTHONUNBUFFERED: '1', TIANYUAN_BODY_FONT_CONFIG: JSON.stringify(cfg) };
+
+  let lastErr = null;
+  for (const py of PYTHON_CANDIDATES) {
+    try {
+      const r = await runCli(py, [script, file], 120000, env);
+      const lines = String(r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+      let saved = null, failed = null;
+      for (const line of lines) {
+        let j = null; try { j = JSON.parse(line); } catch (e) { continue; }
+        if (j.event === 'saved') saved = j;
+        if (j.event === 'failed') failed = j;
+      }
+      if (r.code !== 0 || !saved) {
+        lastErr = new Error(failed ? (failed.reason || '正文字体处理失败') : ((r.stderr || '').slice(-300) || ('python 退出码 ' + r.code)));
+        continue;
+      }
+      return { ok: true, runs: saved.runs || 0, paragraphs: saved.paragraphs || 0, changed: !!saved.changed, asciiFont: cfg.asciiFont };
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('没有可用的 python（需要 python-docx 与 lxml）');
@@ -1477,7 +1734,7 @@ export function apply(ctx) {
   const G = globalThis;
   // 版本号写进 ~/.dsh/workbench-host-applied.json 的 rev 字段，排障时用来确认
   // 运行中的进程到底加载了哪一版宿主代码。改了宿主逻辑就往上加一。
-  const REV = 'rev49';
+  const REV = 'rev52';
   // 路由归属表：path -> 「注册它的那个 apply() 实例」的 token。
   //
   // 为什么不用「REV 布尔标记挡住第二次 apply」：宿主半侧有两个 entry（主包 + 仅宿主的
@@ -1486,6 +1743,243 @@ export function apply(ctx) {
   // 都不剩、整个文件库 404。改成按实例认领/释放，既能去重也能正确交接。
   G.__dshWorkbenchRouteOwners = G.__dshWorkbenchRouteOwners || new Map();
   const routes = [
+    {
+      // 项目下的被评估公司 **及每家公司配置了哪些报告类型**。
+      //
+      // 为什么不用 MCP 的 get_project_companies：那个只给公司名和 id，
+      // 拿不到 reportConfigList，前端就只能无条件列出「报告/说明/长投」三选一。
+      // 而天源里有的公司连「评估报告」这个类型都没建（reportConfigList 为空），
+      // 用户选完只会看到「0 个版本」，还被告知「点重新生成」——必然失败。
+      // 这里把真实配置带出来，界面上就能直说「这家公司没有配置报告类型」。
+      path: PREFIX + '/ty/report-companies', methods: ['GET'], fetch: async (req) => {
+        try {
+          const u = new URL(req.url, 'http://127.0.0.1');
+          const projectId = u.searchParams.get('projectId');
+          if (!/^\d+$/.test(String(projectId || ''))) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
+          // 类型配置只有浏览器侧读得到（/ty/api/company/list 的 reportConfigList）。
+          // 浏览器不可用时退回 MCP 拿公司名，types 给 null 表示"未知"——
+          // 前端据此放开三个类型但仍然提示未能确认配置，不要假装知道。
+          let companies = [];
+          let via = 'browser';
+          let typesKnown = true;
+          try {
+            const rows = await rb.listCompanyTypes(String(projectId));
+            companies = rows.map(c => ({
+              id: String(c.id),
+              name: String(c.name || ''),
+              types: Array.isArray(c.types) ? c.types.map(Number).filter(t => [1, 2, 3].includes(t)) : [],
+            }));
+          } catch (browserErr) {
+            via = 'mcp';
+            typesKnown = false;
+            const res = await ty.callTool('get_project_companies', { projectId: Number(projectId) });
+            const d = res && res.data;
+            const list = Array.isArray(d) ? d : (d && (d.list || d.companies || d.data)) || [];
+            companies = list.map(c => {
+              const raw = c && (c.id != null ? c.id : c.companyId);
+              return { id: raw == null ? '' : String(raw), name: String((c && (c.name || c.companyName)) || ''), types: null };
+            }).filter(c => /^\d+$/.test(c.id));
+            if (!companies.length) throw browserErr;
+          }
+          return json({ ok: true, companies, via, typesKnown });
+        } catch (e) {
+          const friendly = explainBrowserError(e);
+          const code = (e && e.code === 'UNAUTHENTICATED') || friendly ? 401 : 500;
+          return json({ ok: false, error: friendly || String(e.message || e), code: e && e.code }, code);
+        }
+      },
+    },
+    {
+      // 该项目下「已生成、可下载」的报告版本清单，供「报告比对」选原版用。
+      // 只读、只暴露版本与大小，不碰节点正文。
+      path: PREFIX + '/ty/report-versions', methods: ['GET'], fetch: async (req) => {
+        try {
+          const u = new URL(req.url, 'http://127.0.0.1');
+          const projectId = u.searchParams.get('projectId');
+          const companyId = u.searchParams.get('companyId');
+          const reportType = u.searchParams.get('reportType');
+          if (!/^\d+$/.test(String(projectId || ''))) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
+          if (!/^\d+$/.test(String(companyId || ''))) return json({ ok: false, error: 'companyId 必须为数字' }, 400);
+          if (!/^[123]$/.test(String(reportType || ''))) return json({ ok: false, error: 'reportType 只能是 1/2/3' }, 400);
+          const rows = await liveListReports(projectId);
+          const mine = rows
+            .filter(r => String(r.companyId) === String(companyId) && Number(r.type) === Number(reportType) && r.attachId && Number(r.jobState) === 2)
+            .map(r => ({ attachId: r.attachId, version: r.version, updatedAt: r.updatedAt, creator: r.creator }))
+            .sort((a, b) => Number(b.version) - Number(a.version));
+          return json({ ok: true, versions: mine, user: tySession.sessionUser(), via: hasHostSession() ? 'session' : 'browser' });
+        } catch (e) {
+          const friendly = explainBrowserError(e);
+          const code = (e && e.code === 'UNAUTHENTICATED') || friendly ? 401 : 500;
+          return json({ ok: false, error: friendly || String(e.message || e), code: e && e.code }, code);
+        }
+      },
+    },
+    {
+      // 只提交「按当前节点重新出一版」的任务，不等结果。
+      // 前端自己轮询 /ty/report-versions 等新版本出现——生成要 1-3 分钟，
+      // 挂一个长连接等下去只会被浏览器或代理掐断。
+      path: PREFIX + '/ty/report-build', methods: ['POST'], fetch: async (req) => {
+        try {
+          const raw = await req.text();
+          const body = JSON.parse(raw);
+          const projectId = String(body.projectId || '');
+          const companyId = String(body.companyId || '');
+          const reportType = String(body.reportType || '');
+          if (!/^\d+$/.test(projectId)) return json({ ok: false, error: 'projectId 不合法' }, 400);
+          if (!/^\d+$/.test(companyId)) return json({ ok: false, error: 'companyId 不合法' }, 400);
+          if (!/^[123]$/.test(reportType)) return json({ ok: false, error: 'reportType 只能是 1/2/3' }, 400);
+          const jobId = await liveBuildReport(projectId, companyId, reportType);
+          return json({ ok: true, jobId });
+        } catch (e) {
+          const friendly = explainBrowserError(e);
+          const code = (e && e.code === 'UNAUTHENTICATED') || friendly ? 401 : 400;
+          return json({ ok: false, error: friendly || String(e.message || e), code: e && e.code }, code);
+        }
+      },
+    },
+    {
+      // 不需要本地导出基线：当场取线上已生成版本当原版，跟上传改稿比。
+      //
+      // 原版可以指定 attachId（用户在版本列表里选了旧版），留空则取最新已生成版本。
+      // 比对后把 astSha256 / 完整版正文留在宿主内存，只回传一个一次性 token；
+      // 写回时凭 token 取，避免前端持有并发校验所需的哈希。
+      path: PREFIX + '/ty/report-compare-live', methods: ['POST'], fetch: async (req) => {
+        try {
+          const length = Number(req.headers.get('content-length') || 0);
+          if (length > 46 * 1024 * 1024) return json({ ok: false, error: '上传文件过大' }, 413);
+          const raw = await req.text();
+          if (Buffer.byteLength(raw, 'utf8') > 46 * 1024 * 1024) return json({ ok: false, error: '上传文件过大' }, 413);
+          const body = JSON.parse(raw);
+          const projectId = String(body.projectId || '');
+          const companyId = String(body.companyId || '');
+          const reportType = String(body.reportType || '');
+          if (!/^\d+$/.test(projectId)) return json({ ok: false, error: 'projectId 不合法' }, 400);
+          if (!/^\d+$/.test(companyId)) return json({ ok: false, error: 'companyId 不合法' }, 400);
+          if (!/^[123]$/.test(reportType)) return json({ ok: false, error: 'reportType 只能是 1/2/3' }, 400);
+          if (body.attachId != null && body.attachId !== '' && !/^\d+$/.test(String(body.attachId))) return json({ ok: false, error: 'attachId 不合法' }, 400);
+          // 不再在这里挡「未登录」：会话可能只存在于用户的浏览器里，
+          // 真正的可用性由下面的 liveListReports/liveDownloadDocx 现场判定，
+          // 它们的错误会被 explainBrowserError 翻成可操作的提示。
+          const config = await store.config();
+          // 先取原版 DOCX：列表里查不到就中止，不去猜哪一份是"线上版本"。
+          const live = await fetchLiveReportDocx({ projectId, companyId, reportType, attachId: body.attachId });
+          // 再抓节点树与完整版正文（写回要用），与 DOCX 同批，保证哈希与正文一致。
+          const snap = await captureLiveSnapshot({ projectId, companyId, reportType });
+          const result = await compareAgainstLive({
+            rootDir: config.dir,
+            baselineBytes: live.buf,
+            // snap.online 已经是 {snapshot, evidence}，与归档通道喂给定位器的形状一致。
+            online: snap.online,
+            filename: body.filename,
+            base64: body.base64,
+          });
+          // 只留并发校验必需的东西。完整版正文（snap.full）不在这里存：
+          // applyWriteback 写每个节点前会自己重读 content/batch，
+          // 存下来既用不上，又会让 20 条凭据各占最多 64MB 内存。
+          const token = putLiveToken({
+            projectId, companyId, reportType,
+            astSha256: snap.astSha256,
+            baselineVersion: live.version,
+            baselineAttachId: live.attachId,
+            companyName: live.companyName,
+          });
+          return json({ ok: true, result, compareToken: token, baseline: { version: live.version, attachId: live.attachId, companyName: live.companyName } });
+        } catch (e) {
+          const friendly = explainBrowserError(e);
+          return json({ ok: false, error: friendly || String(e.message || e), code: e && e.code }, friendly || (e && e.code === 'UNAUTHENTICATED') ? 401 : 400);
+        }
+      },
+    },
+    {
+      // 写回（现场比对通道）。凭 compareToken 从宿主内存取回当时抓的完整版正文与哈希。
+      //
+      // 与归档基线那条路的区别只在于「完整版正文/hash 从哪来」，
+      // 真正的写回逻辑仍然是同一个 applyWriteback——并发校验一步都不会少。
+      path: PREFIX + '/ty/report-writeback-live', methods: ['POST'], fetch: async (req) => {
+        try {
+          const raw = await req.text();
+          if (Buffer.byteLength(raw, 'utf8') > 4 * 1024 * 1024) return json({ ok: false, error: '请求过大' }, 413);
+          const body = JSON.parse(raw);
+          if (body.confirm !== true) return json({ ok: false, error: '写回需要显式确认' }, 400);
+          const projectId = String(body.projectId || '');
+          if (!/^\d+$/.test(projectId)) return json({ ok: false, error: 'projectId 不合法' }, 400);
+          const entry = takeLiveToken(body.compareToken, projectId);
+          const result = await applyWriteback({
+            projectId: entry.projectId,
+            companyId: entry.companyId,
+            reportType: Number(entry.reportType),
+            // 不伪造 manifest：直接把当场抓的摘要作为期望哈希。
+            expectedSha256: entry.astSha256,
+            locate: body.locate,
+            confirm: true,
+          });
+          // 凭据一次性：写回成功即作废，同一批不允许重复提交。
+          liveCompareTokens.delete(String(body.compareToken));
+          return json({ ok: true, result });
+        } catch (e) { return json({ ok: false, error: String(e.message || e) }, 400); }
+      },
+    },
+    {
+      path: PREFIX + '/ty/report-baselines', methods: ['GET'], fetch: async (req) => {
+        try {
+          const projectId = new URL(req.url).searchParams.get('projectId');
+          if (!/^\d+$/.test(String(projectId || ''))) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
+          const config = await store.config();
+          const baselines = await listBaselines({ rootDir: config.dir, projectId });
+          return json({ ok: true, baselines });
+        } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
+      },
+    },
+    {
+      path: PREFIX + '/ty/report-compare', methods: ['POST'], fetch: async (req) => {
+        try {
+          const length = Number(req.headers.get('content-length') || 0);
+          if (length > 46 * 1024 * 1024) return json({ ok: false, error: '上传文件过大' }, 413);
+          // buffered 后端无法限制框架预缓冲；解析前再次检查实际字节数，不能只信 Content-Length。
+          const raw = await req.text();
+          if (Buffer.byteLength(raw, 'utf8') > 46 * 1024 * 1024) return json({ ok: false, error: '上传文件过大' }, 413);
+          const body = JSON.parse(raw);
+          const config = await store.config();
+          const result = await compareUpload({ rootDir: config.dir, baselineId: body.baselineId, filename: body.filename, base64: body.base64 });
+          return json({ ok: true, result });
+        } catch (e) { return json({ ok: false, error: String(e.message || e) }, 400); }
+      },
+    },
+    {
+      // 把比对结果写回线上报告节点。必须在界面上二次确认后才调，confirm 缺省即拒绝。
+      path: PREFIX + '/ty/report-writeback', methods: ['POST'], fetch: async (req) => {
+        try {
+          const raw = await req.text();
+          if (Buffer.byteLength(raw, 'utf8') > 4 * 1024 * 1024) return json({ ok: false, error: '请求过大' }, 413);
+          const body = JSON.parse(raw);
+          if (body.confirm !== true) return json({ ok: false, error: '写回需要显式确认' }, 400);
+          if (!/^\d+$/.test(String(body.projectId || ''))) return json({ ok: false, error: 'projectId 不合法' }, 400);
+          if (!/^\d+$/.test(String(body.companyId || ''))) return json({ ok: false, error: 'companyId 不合法' }, 400);
+          if (!/^baseline-[A-Za-z0-9]{6}$/.test(String(body.baselineId || ''))) return json({ ok: false, error: 'baselineId 不合法' }, 400);
+          const config = await store.config();
+          const manifest = await readManifestForWriteback({ rootDir: config.dir, baselineId: body.baselineId });
+          // projectId / companyId / reportType 一律以基线 manifest 为准。
+          // 前端传什么只用来核对：对不上就拒，绝不用请求里的值去写别的公司。
+          const meta = (manifest && manifest.metadata) || {};
+          const wantProject = String(meta.projectId || '');
+          const wantCompany = String(meta.companyId || '');
+          const wantType = Number(meta.reportType);
+          if (wantProject !== String(body.projectId)) return json({ ok: false, error: 'projectId 与基线不一致' }, 400);
+          if (wantCompany !== String(body.companyId)) return json({ ok: false, error: 'companyId 与基线不一致' }, 400);
+          if (!Number.isInteger(wantType) || wantType < 1) return json({ ok: false, error: '基线缺少有效的 reportType' }, 400);
+          if (body.reportType != null && String(body.reportType) !== String(wantType)) return json({ ok: false, error: 'reportType 与基线不一致' }, 400);
+          const result = await applyWriteback({
+            projectId: wantProject,
+            companyId: wantCompany,
+            reportType: wantType,
+            baseline: manifest,
+            locate: body.locate,
+            confirm: true,
+          });
+          return json({ ok: true, result });
+        } catch (e) { return json({ ok: false, error: String(e.message || e) }, 400); }
+      },
+    },
     // 报告格式接口由独立宿主 bundle 注册，避免重复绑定。
     {
       path: PREFIX + '/quotes', methods: ['GET', 'HEAD'], fetch: async (req) => {
@@ -1842,6 +2336,15 @@ export function apply(ctx) {
                     await writeFile(tmpPath, buf);
                     await rename(tmpPath, finalPath);
                     const rec = { file: finalPath, company: f.companyName, companyId: f.companyId, type: f.type, version: f.version, bytes: buf.length, formatted: false };
+                    // 先归正文字体（只动正文段落），再处理表格（只动表格），两步互不影响。
+                    try {
+                      const bf = await applyBodyFontNormalize(finalPath);
+                      rec.bodyNormalized = true;
+                      rec.bodyRuns = bf.runs;
+                      rec.bodyFont = bf.asciiFont;
+                    } catch (e) {
+                      fmtErrors.push((f.fileName || '未知文件') + '：正文字体未处理（' + String(e.message || e) + '）');
+                    }
                     if (applyFormat) {
                       try {
                         const fm = await applyDocxTableFormat(finalPath);
@@ -1851,10 +2354,46 @@ export function apply(ctx) {
                         rec.formatMode = fm.mode || 'toolbox';
                         rec.skippedAttachment = fm.skippedAttachment || 0;
                         rec.skippedFormatted = fm.skippedFormatted || 0;
+                        rec.reflowedUniform = fm.reflowedUniformGrids || 0;
+                        rec.repairedHeaderRows = fm.repairedHeaderRows || 0;
                       } catch (e) {
                         // 格式处理失败不丢文件：保留原件，错误单列
                         fmtErrors.push((f.fileName || '未知文件') + '：表格格式未处理（' + String(e.message || e) + '）');
                       }
+                    }
+                    // 以实际交付的格式处理后文件为比对基线，同时抓一份同批次的线上节点树：
+                    // 只有这样才能在后续比对里说清"这处改动对应线上哪一段"。
+                    try {
+                      const cfg = await store.config();
+                      let online = null;
+                      let onlineError = '';
+                      try {
+                        online = await captureOnlineNodes({ projectId, companyId: f.companyId, reportType: f.type });
+                      } catch (e) {
+                        // 快照抓不到不影响导出，如实记录原因，基线降级为 not_captured。
+                        onlineError = String(e.message || e);
+                      }
+                      let onlineFull = null;
+                      let onlineFullError = '';
+                      try {
+                        onlineFull = online ? await captureOnlineFullNodes({ projectId, companyId: f.companyId, reportType: f.type, document: online.document }) : null;
+                        if (!online) onlineFullError = '没有线上节点树，完整版快照未抓取';
+                      } catch (e) {
+                        // 完整版抓不到也不影响导出：基线降级为「没有完整版」。
+                        onlineFullError = String(e.message || e);
+                      }
+                      const saved = await archiveReportBaseline({ rootDir: cfg.dir, sourcePath: finalPath, metadata: {
+                        projectId, projectName: String(b.projectName || ''), companyId: String(f.companyId || ''),
+                        companyName: String(f.companyName || ''), reportType: String(f.type || ''), version: String(f.version ?? ''),
+                      }, online: online || undefined, onlineFull: onlineFull || undefined });
+                      rec.baselineId = basename(dirname(saved.archiveDir));
+                      rec.baselineSnapshot = saved.snapshotStatus;
+                      rec.baselineFull = saved.fullStatus;
+                      if (onlineError) rec.baselineOnlineError = onlineError;
+                      if (onlineFullError) rec.baselineFullError = onlineFullError;
+                    } catch (e) {
+                      rec.baselineError = String(e.message || e);
+                      fmtErrors.push((f.fileName || '未知文件') + '：导出成功，但比对基线保存失败（' + rec.baselineError + '）');
                     }
                     files.push(rec);
                   } catch (e) { errors.push((f.fileName || '未知文件') + '：写入失败 ' + String(e.message || e)); }
@@ -1865,17 +2404,29 @@ export function apply(ctx) {
                 const fmtTables = files.reduce((n, f) => n + (f.tables || 0), 0);
                 const fmtSkipAtt = files.reduce((n, f) => n + (f.skippedAttachment || 0), 0);
                 const fmtSkipDone = files.reduce((n, f) => n + (f.skippedFormatted || 0), 0);
+                const fmtReflow = files.reduce((n, f) => n + (f.reflowedUniform || 0), 0);
+                const fmtRepaired = files.reduce((n, f) => n + (f.repairedHeaderRows || 0), 0);
+                const bodyOk = files.filter(f => f.bodyNormalized).length;
+                const bodyRuns = files.reduce((n, f) => n + (f.bodyRuns || 0), 0);
+                const bodyFont = (files.find(f => f.bodyFont) || {}).bodyFont || '宋体';
                 let suffix = '';
+                if (bodyOk) {
+                  suffix += bodyRuns
+                    ? '，正文数字已统一为「' + bodyFont + '」（' + bodyOk + ' 份、' + bodyRuns + ' 处）'
+                    : '，正文西文字体本来就符合设置，未改动';
+                }
                 if (applyFormat && fmtOk) {
                   if (fmtTables) {
-                    suffix = '，已按「报告格式」页的表格参数处理 ' + fmtOk + ' 份的表格（共 ' + fmtTables + ' 张表）';
+                    suffix += '，已按「报告格式」页的表格参数处理 ' + fmtOk + ' 份的表格（共 ' + fmtTables + ' 张表）';
                   } else {
-                    suffix = '，' + fmtOk + ' 份的表格本来就已经符合「报告格式」页的参数，未做改动';
+                    suffix += '，' + fmtOk + ' 份的表格本来就已经符合「报告格式」页的参数，未做改动';
                   }
                   const skips = [];
-                  if (fmtSkipDone) skips.push(fmtSkipDone + ' 张已排好的表');
-                  if (fmtSkipAtt) skips.push(fmtSkipAtt + ' 张附件里的表');
-                  if (skips.length) suffix += '；跳过了' + skips.join('、');
+                  if (fmtRepaired) skips.push('修回了 ' + fmtRepaired + ' 行被旧版误设成重复表头的数据行');
+                  if (fmtReflow) skips.push(fmtReflow + ' 张原为等宽、已按内容重排列宽');
+                  if (fmtSkipDone) skips.push(fmtSkipDone + ' 张已经排好、原样未动');
+                  if (fmtSkipAtt) skips.push(fmtSkipAtt + ' 张附件里的 Word 表');
+                  if (skips.length) suffix += '；' + skips.join('、');
                 }
                 setProg({
                   status: okAll ? 'done' : (files.length ? 'partial' : 'failed'), stage: okAll ? 'done' : (files.length ? 'partial' : 'failed'),
@@ -2041,7 +2592,38 @@ export function apply(ctx) {
                     const tmpPath = outPath + '.part';
                     await writeFile(tmpPath, buf);
                     await rename(tmpPath, outPath);
-                    files.push({ file: outPath, company: it.companyName, companyId: it.companyId, type: Number(it.type), version });
+                    const rec = { file: outPath, company: it.companyName, companyId: it.companyId, type: Number(it.type), version };
+                    try {
+                      const cfg = await store.config();
+                      let online = null;
+                      let onlineError = '';
+                      try {
+                        online = await captureOnlineNodes({ projectId, companyId: it.companyId, reportType: it.type });
+                      } catch (e) {
+                        onlineError = String(e.message || e);
+                      }
+                      let onlineFull = null;
+                      let onlineFullError = '';
+                      try {
+                        onlineFull = online ? await captureOnlineFullNodes({ projectId, companyId: it.companyId, reportType: it.type, document: online.document }) : null;
+                        if (!online) onlineFullError = '没有线上节点树，完整版快照未抓取';
+                      } catch (e) {
+                        onlineFullError = String(e.message || e);
+                      }
+                      const saved = await archiveReportBaseline({ rootDir: cfg.dir, sourcePath: outPath, metadata: {
+                        projectId, projectName: String(b.projectName || ''), companyId: String(it.companyId || ''),
+                        companyName: String(it.companyName || ''), reportType: String(it.type), version: String(version ?? ''),
+                      }, online: online || undefined, onlineFull: onlineFull || undefined });
+                      rec.baselineId = basename(dirname(saved.archiveDir));
+                      rec.baselineSnapshot = saved.snapshotStatus;
+                      rec.baselineFull = saved.fullStatus;
+                      if (onlineError) rec.baselineOnlineError = onlineError;
+                      if (onlineFullError) rec.baselineFullError = onlineFullError;
+                    } catch (e) {
+                      rec.baselineError = String(e.message || e);
+                      errors.push(`${it.companyName} · ${label}：导出成功，但比对基线保存失败（${rec.baselineError}）`);
+                    }
+                    files.push(rec);
                     setProg({ status: 'running', stage: 'running', total: items.length, done: i + 1, files, errors, outDir, message: `[${i + 1}/${items.length}] 已完成 ${it.companyName} · ${label} V${version}` });
                   } catch (e) {
                     errors.push(`${it.companyName} · ${label}：${String(e.message || e)}`);
@@ -2554,6 +3136,9 @@ export function apply(ctx) {
           const create = b.create !== false;
           const want = safeFolderName(b.folder || '');
           const legacy = safeFolderName(b.legacy || '');
+          // 绑定过绝对路径的项目（folderPath）：直接用那个目录，不再按名字在项目根里找。
+          // 这样项目可以放在任意位置（OneDrive、客户目录……），也能在根目录之外建。
+          const absBound = String(b.abs || '').trim();
           // 兼容旧调用（只给 year + name）
           if (!want && !legacy && b.name) {
             const r = b.open === false
@@ -2561,15 +3146,18 @@ export function apply(ctx) {
               : await store.openProjectFolder(b.year, b.name, create);
             return json(r, r.ok ? 200 : 400);
           }
-          if (!want && !legacy) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
+          if (!want && !legacy && !absBound) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
           const names = [want, legacy].filter(Boolean);
-          // remove=true：删除项目时连文件夹一起删（只删项目根目录下的一层目录，找不到就当本来就不存在）
+          // remove=true：删除项目时连文件夹一起删（只删一层目录，找不到就当本来就不存在）
           if (b.remove === true) {
             let hit = null;
-            for (const n of names) { hit = await store.findProjectDir(n); if (hit) break; }
-            if (!hit) {
+            if (absBound) hit = await store.describeFolder(absBound, false);
+            if (!hit || !hit.ok) {
+              for (const n of names) { const h = await store.findProjectDir(n); if (h) { hit = h; break; } }
+            }
+            if (!hit || !hit.ok) {
               const { projectsDir } = await store.config();
-              return json({ ok: true, removed: false, path: join(projectsDir, want || legacy), note: '文件夹本来就不存在' });
+              return json({ ok: true, removed: false, path: absBound || join(projectsDir, want || legacy), note: '文件夹本来就不存在' });
             }
             try {
               await rm(hit.path, { recursive: true, force: true });
@@ -2578,9 +3166,15 @@ export function apply(ctx) {
               return json({ ok: false, error: '删除文件夹失败：' + String(e.message || e), path: hit.path }, 500);
             }
           }
-          // 已存在的老目录优先复用（新名字 <编号 简称> → 旧名字 <年份 项目名>）
-          let hit = null;
-          for (const n of names) { hit = await store.findProjectDir(n); if (hit) break; }
+          // 绑定的绝对路径优先；没有再按名字在项目根里找（新名字 <编号 简称> → 旧名字 <年份 项目名>）
+          let hit = absBound ? await store.describeFolder(absBound, create) : null;
+          // 绑定了绝对路径却用不了（路径是文件、没权限、create=false 且不存在）：直接报错，
+          // 不要悄悄回落到项目根去建目录 —— 那会把底稿写到用户根本没指定的地方。
+          if (absBound) {
+            if (!hit || !hit.ok) return json({ ok: false, error: (hit && hit.error) || ('文件夹不可用：' + absBound) }, 400);
+          } else {
+            for (const n of names) { hit = await store.findProjectDir(n); if (hit) break; }
+          }
           let created = false;
           if (!hit) {
             if (!create) {
@@ -2592,6 +3186,7 @@ export function apply(ctx) {
             hit = r;
             created = true;
           }
+          if (hit.created) created = true;
           const abs = hit.path;
           // sub=03底稿/管理类底稿/程序文件：项目界面里「打开文件夹」要能直接落到子目录
           const subParts = safeSubParts(Array.isArray(b.sub) ? b.sub.join('/') : String(b.sub || ''));
@@ -2601,7 +3196,70 @@ export function apply(ctx) {
             const o = await openShell(openTarget);
             if (!o.ok) return json({ ok: false, error: (o.error || '打开失败') + '；文件夹已建好：' + openTarget, path: openTarget }, 400);
           }
-          return json({ ok: true, path: openTarget, name: hit.name, created, legacy: hit.name === legacy && legacy !== want, root: hit.root });
+          return json({ ok: true, path: openTarget, name: hit.name, created, legacy: hit.name === legacy && legacy !== want, root: hit.root, bound: !!absBound, abs: abs });
+        } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
+      },
+    },
+    {
+      // 新建一个项目文件夹并返回绝对路径（不打开）。
+      // POST /project/folder/new { parent?, name, year?, code?, shortName?, sub? }
+      //  - parent 给了就在 parent 下建（用户可以选到任意位置，比如 OneDrive 的客户目录）；
+      //  - 没给就用「项目目录」根（00项目ing）；
+      //  - name 省略时按「项目编号 项目简称」生成。
+      // 只建目录、不改数据；前端拿到 path 后自己写进 project.folderPath。
+      path: PREFIX + '/project/folder/new', methods: ['POST'], fetch: async (req) => {
+        try {
+          const b = await req.json().catch(() => ({}));
+          const code = cleanSegment(b.code, 80);
+          const shortName = cleanSegment(b.shortName || b.name, 120);
+          // 命名必须和客户端 folderNameOf() 完全一致（<项目编号> <项目简称>，不带年份）：
+          // 否则绑定后按名字回落查找会找不到「同一个」目录，出现两份项目文件夹。
+          const autoName = b.name
+            ? safeFolderName(b.name)
+            : safeFolderName([code, shortName].filter(Boolean).join(' ') || '未命名项目');
+          if (!autoName) return json({ ok: false, error: '文件夹名不合法' }, 400);
+          const parentRaw = String(b.parent || '').trim();
+          let parent = '';
+          if (parentRaw) {
+            const p = await store.describeFolder(parentRaw, true);
+            if (!p || !p.ok) return json({ ok: false, error: (p && p.error) || '父目录不合法：' + parentRaw }, 400);
+            parent = p.path;
+          } else {
+            parent = (await store.config()).projectsDir;
+          }
+          const target = join(parent, autoName);
+          if (existsSync(target)) {
+            const sub = safeSubParts(Array.isArray(b.sub) ? b.sub.join('/') : String(b.sub || ''));
+            const abs = sub && sub.length ? join(target, ...sub) : target;
+            if (abs !== target) await mkdir(abs, { recursive: true });
+            return json({ ok: true, path: abs, dir: target, name: autoName, parent, existed: true, created: false });
+          }
+          const sub = safeSubParts(Array.isArray(b.sub) ? b.sub.join('/') : String(b.sub || ''));
+          const abs = sub && sub.length ? join(target, ...sub) : target;
+          await mkdir(abs, { recursive: true });
+          return json({ ok: true, path: abs, dir: target, name: autoName, parent, existed: false, created: true });
+        } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
+      },
+    },
+    {
+      // 探测一个绝对路径：是不是目录、里面有什么（绑定已有文件夹前先看一眼，避免绑错）
+      // POST /project/folder/probe { path }
+      path: PREFIX + '/project/folder/probe', methods: ['POST'], fetch: async (req) => {
+        try {
+          const b = await req.json().catch(() => ({}));
+          const d = await store.describeFolder(b.path, false);
+          if (!d) return json({ ok: false, error: '请填绝对路径，例如 ' + (await store.config()).projectsDir }, 400);
+          if (!d.ok) return json({ ok: false, error: d.error, path: d.path, name: d.name }, 200);
+          // 目录概况：一级子目录数与文件数，界面显示「已绑定 · 12 个子目录」这类提示
+          let dirs = 0, files = 0, sample = [];
+          try {
+            const names = await readdir(d.path, { withFileTypes: true });
+            for (const it of names) {
+              if (it.isDirectory()) { dirs += 1; if (sample.length < 8) sample.push(it.name + '/'); }
+              else files += 1;
+            }
+          } catch (e) { /* 读不了内容不算探测失败 */ }
+          return json({ ok: true, path: d.path, name: d.name, parent: d.root, dirs, files, sample });
         } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
       },
     },
@@ -2612,7 +3270,8 @@ export function apply(ctx) {
         try {
           const u = new URL(req.url || '/', 'http://workbench.local');
           const folder = safeFolderName(u.searchParams.get('folder'));
-          if (!folder) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
+          const absBound = String(u.searchParams.get('abs') || '').trim();
+          if (!folder && !absBound) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
           const subParts = safeSubParts(u.searchParams.get('sub'));
           if (!subParts) return json({ ok: false, error: '目标子目录不合法' }, 400);
           const fileName = safeFileSegment(u.searchParams.get('name'));
@@ -2620,12 +3279,21 @@ export function apply(ctx) {
           const buf = Buffer.from(await req.arrayBuffer());
           if (!buf.length) return json({ ok: false, error: '文件内容为空' }, 400);
           if (buf.length > MAX_UPLOAD) return json({ ok: false, error: '文件超过 ' + Math.round(MAX_UPLOAD / 1048576) + ' MB，请先压缩' }, 400);
-          let base = await store.findProjectDir(folder);
-          if (!base) {
-            const made = await store.projectDir(folder, true);
-            if (!made.ok) return json({ ok: false, error: made.error }, 400);
-            base = made;
+          // 绑定了绝对路径就用它；否则按名字找（老逻辑），找不到再建
+          let base = absBound ? await store.describeFolder(absBound, true) : null;
+          if (absBound && (!base || base.ok === false)) {
+            return json({ ok: false, error: (base && base.error) || ('项目文件夹不可用：' + absBound) }, 400);
           }
+          if (!base || base.ok === false) {
+            const byName = await store.findProjectDir(folder);
+            if (byName) base = { ok: true, ...byName };
+            else if (folder) {
+              const made = await store.projectDir(folder, true);
+              if (!made.ok) return json({ ok: false, error: made.error }, 400);
+              base = made;
+            }
+          }
+          if (!base || base.ok === false) return json({ ok: false, error: (base && base.error) || '项目文件夹不存在' }, 400);
           const targetDir = join(base.path, ...subParts);
           await mkdir(targetDir, { recursive: true });
           const abs = join(targetDir, fileName);
@@ -2696,10 +3364,15 @@ export function apply(ctx) {
         try {
           const b = await req.json().catch(() => ({}));
           const folder = safeFolderName(b.folder);
-          if (!folder) return json({ ok: false, files: [], md: [], error: '项目文件夹名不合法' }, 400);
+          const absBound = String(b.abs || '').trim();
+          if (!folder && !absBound) return json({ ok: false, files: [], md: [], error: '项目文件夹名不合法' }, 400);
           const subParts = safeSubParts(b.sub || '02现场资料/业务委托合同');
           if (!subParts) return json({ ok: false, files: [], md: [], error: '子目录不合法' }, 400);
-          const hit = await store.findProjectDir(folder);
+          let bound = absBound ? await store.describeFolder(absBound, false) : null;
+          if (absBound && (!bound || bound.ok === false)) {
+            return json({ ok: false, files: [], md: [], error: (bound && bound.error) || ('项目文件夹不可用：' + absBound) }, 200);
+          }
+          const hit = bound || await store.findProjectDir(folder);
           const root = hit ? hit.path : join((await store.config()).projectsDir, folder);
           const d = join(root, ...subParts);
           if (!existsSync(d)) return json({ ok: true, files: [], md: [], dir: d });
@@ -2717,18 +3390,21 @@ export function apply(ctx) {
           const b = await req.json().catch(() => ({}));
           const mode = String(b.mode || 'all');
           const folder = safeFolderName(b.folder);
-          if (!folder) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
+          const absBound = String(b.abs || '').trim();
+          if (!folder && !absBound) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
           const subParts = safeSubParts(b.sub);
           if (!subParts) return json({ ok: false, error: '目标子目录不合法' }, 400);
           const fileName = safeFileSegment(b.name);
           if (!fileName) return json({ ok: false, error: '文件名为空或不合法' }, 400);
-          const hit = await store.findProjectDir(folder);
+          const bound = absBound ? await store.describeFolder(absBound, false) : null;
+          const hit = (bound && bound.ok) ? bound : await store.findProjectDir(folder);
           const root = hit ? hit.path : join((await store.config()).projectsDir, folder);
+          const relPrefix = hit && hit.bound ? '' : (hit ? hit.name + sep : folder + sep);
           const abs = join(root, ...subParts, fileName);
           if (!existsSync(abs)) return json({ ok: false, error: '文件不存在，请先点「添加」：' + abs }, 400);
           const mdName = fileName.replace(/\.[^.]+$/, '') + '.md';
           const mdAbs = join(root, ...subParts, mdName);
-          const mdRel = (hit ? hit.name : folder) + sep + mdAbs.slice(root.length + 1);
+          const mdRel = relPrefix + mdAbs.slice(root.length + 1);
 
           // 1) 转 markdown：已有且不比原文件旧就直接复用
           let text = '';
@@ -2870,13 +3546,22 @@ export function apply(ctx) {
         try {
           const b = await req.json().catch(() => ({}));
           const folder = safeFolderName(b.folder || '');
-          if (!folder) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
-          let base = await store.findProjectDir(folder);
-          if (!base) {
-            const made = await store.projectDir(folder, true);
-            if (!made.ok) return json({ ok: false, error: made.error }, 400);
-            base = made;
+          const absBound = String(b.abs || '').trim();
+          if (!folder && !absBound) return json({ ok: false, error: '项目文件夹名不合法（先填项目编号与项目简称）' }, 400);
+          let base = absBound ? await store.describeFolder(absBound, true) : null;
+          if (absBound && (!base || base.ok === false)) {
+            return json({ ok: false, error: (base && base.error) || ('项目文件夹不可用：' + absBound) }, 400);
           }
+          if (!base || base.ok === false) {
+            const byName = folder ? await store.findProjectDir(folder) : null;
+            if (byName) base = { ok: true, ...byName };
+            else if (folder) {
+              const made = await store.projectDir(folder, true);
+              if (!made.ok) return json({ ok: false, error: made.error }, 400);
+              base = made;
+            }
+          }
+          if (!base || base.ok === false) return json({ ok: false, error: (base && base.error) || '项目文件夹不存在' }, 400);
           const root = base.path;
           await mkdir(root, { recursive: true });
           const plan = planProjectFolders({ companies: Array.isArray(b.companies) ? b.companies : [] });
@@ -3013,7 +3698,9 @@ export function apply(ctx) {
           // （改完 library.js 却没重启时这里会是 false，能一眼看出代码没换）
           libRev: typeof lib.resolveLibPath === 'function' ? 'rev13' : 'old',
           // 数据落盘层（默认目录 / 配置文件路径）也在标记里露一眼，排障时不用反查代码
-          storeRev: typeof store.writeState === 'function' ? 'rev13' : 'old',
+          // rev14 = store.js 里带 describeFolder/resolveProjectDir（绑定任意本地目录的那版）。
+          // 这行是排障证据：宿主进程缓存了旧 store.js 时会显示 old/rev13，一眼看出绑定功能没生效。
+          storeRev: typeof store.describeFolder === 'function' ? 'rev14-bind' : (typeof store.writeState === 'function' ? 'rev13' : 'old'),
           // macOS 移植：把实际解析到的 python 候选链露出来，取文/导入失败时能一眼定位
           python: PYTHON_CANDIDATES,
           serving: mine.length ? 'this-entry' : 'other-entry',
