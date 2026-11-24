@@ -22,6 +22,8 @@ function isSessionError(e) {
   const msg = String(e && e.message || '');
   return /no valid session|session.*(invalid|expired|失效)/i.test(msg) || (e && e.sessionInvalid === true);
 }
+// 瞬时网络错误（WAF/网关 400/502/503）：不带 session 语义，原样重试同一请求即可，不必 resetSession。
+function isTransientError(e) { return e && e.transient === true; }
 function resetSession() { mcpSession = null; }
 
 async function loadAuth() {
@@ -191,7 +193,11 @@ async function mcpRaw(method, params, id) {
   const data = parseBody(text, r.headers.get('content-type'));
   if (!r.ok && r.status !== 202) {
     const msg = (data && (data.error?.message || data.message)) || ('MCP HTTP ' + r.status);
-    throw new Error('MCP HTTP ' + r.status + ': ' + msg);
+    const e = new Error('MCP HTTP ' + r.status + ': ' + msg);
+    // 远端 WAF/网关偶发 400/502/503（实测同一请求重试即过），标记为瞬时错误供 callTool 层退避重试；
+    // 401/403 是凭据问题，不算瞬时，不标记。
+    if (r.status === 400 || r.status === 502 || r.status === 503) e.transient = true;
+    throw e;
   }
   return { data, status: r.status, sessionId: sid };
 }
@@ -211,7 +217,8 @@ export async function listTools() {
   return tools.map(t => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} }));
 }
 export async function callTool(name, args) {
-  // session 失效时自动重新 initialize 再试一次；仍失败则透传错误（不做推测数据补全）。
+  // session 失效时自动重新 initialize 再试一次；瞬时网络错误（400/502/503）原样重试一次；
+  // 仍失败则透传错误（不做推测数据补全）。
   for (let attempt = 0; attempt < 2; attempt++) {
     await ensureInit();
     try {
@@ -228,6 +235,7 @@ export async function callTool(name, args) {
       return { content: result.content || [], structuredContent: result.structuredContent || null, data: parsed, isError: !!result.isError };
     } catch (e) {
       if (attempt === 0 && isSessionError(e)) { resetSession(); continue; }
+      if (attempt === 0 && isTransientError(e)) { continue; }
       throw e;
     }
   }
