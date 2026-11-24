@@ -3862,6 +3862,7 @@ export function apply(ctx) {
         type: 'object',
         properties: {
           tyId: { type: 'string', pattern: '^[0-9]+$', description: '天源数字项目 ID，来自 workbench_ty_projects 的 tyId 字段。' },
+          detail: { type: 'boolean', description: '可选：默认精简输出（仅业务字段）。设为 true 时附完整远端返回（含 columnGroups 等元数据），体积大，仅在需要列 schema 时使用。' },
         },
         required: ['tyId'],
         additionalProperties: false,
@@ -3876,11 +3877,21 @@ export function apply(ctx) {
         if (!j || typeof j !== 'object') return { ok: false, reason: 'get_project_summary 返回格式异常', raw: r.content };
         const rows = Array.isArray(j.rows) ? j.rows : [];
         const refreshed = !!(j.source && j.source.refreshed);
+        // 精简输出：只留业务字段，过滤 columnGroups / metrics / warnings 等元数据（单次 3KB→几百字节）。
+        // baseDate 摘自 filters（若远端有），其余元数据按需用 detail=true 取回。
+        const filters = (j.filters && typeof j.filters === 'object') ? j.filters : {};
+        const baseDate = filters.baseDate ?? filters.valuationDate ?? null;
+        if (a.detail === true) {
+          return { ok: true, projectId: tyId, projectName: j.projectName || null, refreshed,
+            note: refreshed ? '系统汇总已刷新，为最新口径。' : '系统汇总未刷新（refreshed=false），数据为系统缓存口径，非最新底稿结果，回复时必须注明。',
+            baseDate, companies: rows.map(row => ({ companyName: row.companyName || null })), full: j };
+        }
         return {
           ok: true,
           projectId: tyId,
           projectName: j.projectName || null,
           refreshed,
+          baseDate,
           note: refreshed
             ? '系统汇总已刷新，为最新口径。'
             : '系统汇总未刷新（refreshed=false），数据为系统缓存口径，非最新底稿结果，回复时必须注明。',
@@ -3890,7 +3901,6 @@ export function apply(ctx) {
             valuationValue: tyAmount(row.valuationValue),
             valueAdded: tyAmount(row.valueAdded),
             finalMethod: row.finalMethod || null,
-            availableMethods: Array.isArray(row.availableMethods) ? row.availableMethods : [],
             status: row.statusName || row.status || null,
           })),
         };
