@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blockText, plainText, replaceBlockText, applyWriteback } from './report-writeback.js';
+import { blockText, plainText, replaceBlockText, applyWriteback, insertBlocksAfter, deleteBlocksAt } from './report-writeback.js';
+import { stripNumberingPrefix } from './report-node-mapper.js';
 
 const doc = () => ({
   type: 'doc',
@@ -127,4 +128,103 @@ test('现场比对通道：依然要先过 confirm，且要先有定位结果', 
     () => applyWriteback({ projectId: '1', companyId: '2', reportType: 1, expectedSha256: 'a'.repeat(64), locate: { located: [] }, confirm: true }),
     /没有可写回的改动/,
   );
+});
+
+// ---------- 序号剥不剥，取决于线上原文自己带不带 ----------
+//
+// 血泪教训（实测浙江交投金属 V4）：报告里很多章节序号是**字面写在节点正文里**的
+// （DOCX 里 w:numPr/w:numId 出现 0 次，全是死文本），例如「1．市场法」「(1) 必须
+// 有一个充分发展、活跃的资本市场；」。而另一批序号（「(二)」「18.」「2.」）确实
+// 只存在于生成出来的 DOCX 里、节点正文没有。
+//
+// 早期实现无条件 stripNumberingPrefix，导致改「1．市场法」→「1．市场法（2024年修订）」
+// 写回去变成「市场法（2024年修订）」，序号被当成前缀扔掉。
+// 正确判据是线上原文：原文自带序号 → 序号属于内容，必须保留；原文没有 → 剥掉，
+// 否则写回去会和生成器重复加一遍。
+
+test('写回时线上原文自带序号，必须保留改稿里的序号（不能剥）', () => {
+  // 直接验证判据函数本身，避免为这条规则起浏览器会话
+  const decide = (originalText, rawWanted) => {
+    const originalHasPrefix = typeof originalText === 'string' && originalText.trim() !== ''
+      && stripNumberingPrefix(originalText) !== originalText.trim();
+    return originalHasPrefix ? String(rawWanted).trim() : stripNumberingPrefix(String(rawWanted));
+  };
+  assert.equal(decide('1．市场法', '1．市场法（2024年修订）'), '1．市场法（2024年修订）', '字面序号必须留在正文里');
+  assert.equal(decide('(1) 必须有一个充分发展、活跃的资本市场；', '(1) 必须有充分发展、活跃的资本市场；'), '(1) 必须有充分发展、活跃的资本市场；');
+});
+
+test('写回时线上原文没有序号，必须剥掉改稿里的序号（否则与生成器重复）', () => {
+  const decide = (originalText, rawWanted) => {
+    const originalHasPrefix = typeof originalText === 'string' && originalText.trim() !== ''
+      && stripNumberingPrefix(originalText) !== originalText.trim();
+    return originalHasPrefix ? String(rawWanted).trim() : stripNumberingPrefix(String(rawWanted));
+  };
+  assert.equal(decide('不动产权证书；', '2. 不动产权证书；'), '不动产权证书；');
+  assert.equal(
+    decide('截至评估基准日，纳入评估范围的6项房屋建筑物尚未取得不动产权证书，具体如下：',
+           '(二) 截至评估基准日，纳入评估范围的6项房屋建筑物尚未取得不动产权证书，具体如下：'),
+    '截至评估基准日，纳入评估范围的6项房屋建筑物尚未取得不动产权证书，具体如下：',
+  );
+  assert.equal(
+    decide('《商标资产评估指导意见》（中评协〔2017〕51号）；',
+           '18. 《商标资产评估指导意见》（中评协〔2017〕51号）。'),
+    '《商标资产评估指导意见》（中评协〔2017〕51号）。',
+  );
+});
+
+// ── 增删段落：节点是段落数组，增删就是改数组长度 ──
+test('insertBlocksAfter 必须沿用锚点段的 attrs 与 marks，否则线上渲染会崩', () => {
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', attrs: { textAlign: 'justify', indent: 1, lineHeight: '150%' },
+        content: [{ type: 'text', marks: [{ type: 'textStyle', attrs: { fontFamily: '宋体', fontSize: 12 } }], text: '锚点段落' }] },
+      { type: 'paragraph', attrs: { textAlign: 'justify', indent: 1, lineHeight: '150%' },
+        content: [{ type: 'text', marks: [{ type: 'textStyle', attrs: { fontFamily: '宋体', fontSize: 12 } }], text: '后一段' }] },
+    ],
+  };
+  const out = insertBlocksAfter(doc, 0, ['新加的第一段', '新加的第二段']);
+  assert.ok(out);
+  assert.equal(out.content.length, 4);
+  assert.equal(plainText(out.content[1]), '新加的第一段');
+  assert.equal(plainText(out.content[2]), '新加的第二段');
+  // 关键：attrs 与 marks 必须原样带过来。attrs 为 null 会让线上抛
+  // Cannot invoke "java.util.Map.get(Object)" because "content.attrs" is null
+  for (const i of [1, 2]) {
+    assert.ok(out.content[i].attrs && typeof out.content[i].attrs === 'object', 'attrs 不能为 null');
+    assert.equal(out.content[i].attrs.textAlign, 'justify');
+    assert.ok(Array.isArray(out.content[i].content[0].marks), 'marks 不能丢');
+    assert.equal(out.content[i].content[0].marks[0].attrs.fontFamily, '宋体');
+  }
+});
+
+test('insertBlocksAfter 支持插到锚点段之前（文首新增的场景）', () => {
+  const doc = {
+    type: 'doc',
+    content: [{ type: 'paragraph', attrs: {}, content: [{ type: 'text', text: '第一段' }] }],
+  };
+  const out = insertBlocksAfter(doc, 0, ['插到前面'], { before: true });
+  assert.equal(plainText(out.content[0]), '插到前面');
+  assert.equal(plainText(out.content[1]), '第一段');
+});
+
+test('deleteBlocksAt 只删文本匹配的段，不误删相邻空段', () => {
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', attrs: {}, content: [{ type: 'text', text: '要删的' }] },
+      { type: 'paragraph', attrs: {}, content: [{ type: 'text', text: '' }] },
+      { type: 'paragraph', attrs: {}, content: [{ type: 'text', text: '留下的' }] },
+    ],
+  };
+  const out = deleteBlocksAt(doc, 0, ['要删的']);
+  assert.ok(out);
+  assert.equal(out.content.length, 2);
+  assert.equal(plainText(out.content[0]), '');
+  assert.equal(plainText(out.content[1]), '留下的');
+});
+
+test('deleteBlocksAt 文本对不上时返回 null（宁可不删也不猜）', () => {
+  const doc = { type: 'doc', content: [{ type: 'paragraph', attrs: {}, content: [{ type: 'text', text: '别的' }] }] };
+  assert.equal(deleteBlocksAt(doc, 0, ['要删的']), null);
 });

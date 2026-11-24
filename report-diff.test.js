@@ -50,6 +50,36 @@ test('unique one-to-one change is only a candidate', () => {
     assert.equal(result.changes[0].baseline.text, 'old'); assert.equal(result.changes[0].modified.text, 'new');
   });
 });
+test('修订模式下的改动必须仍能被识别为候选修改（按"接受修订"处理）', () => {
+  // 用户在 Word 里开着修订改稿是最典型的做法。以前一见到 <w:ins> 就把整段
+  // 标成 unsupported，导致每处真实改动都变成"含变量/图片"、不可写回——
+  // 等于功能对最典型的用法直接失效。
+  const ins = `<w:p><w:r><w:t>截至评估基准日，尚未取得不动产权</w:t></w:r><w:ins w:id="9" w:author="张三" w:date="2026-11-23T10:00:00Z"><w:r><w:t>证书</w:t></w:r></w:ins><w:r><w:t>，具体如下：</w:t></w:r></w:p>`;
+  withDocs(wrap(p('anchor') + p('截至评估基准日，尚未取得不动产权证，具体如下：')), wrap(p('anchor') + ins), (a, b) => {
+    const { result } = run(a, b);
+    assert.equal(result.changes.length, 1);
+    assert.equal(result.changes[0].type, 'candidate_change', '修订里的插入应算作改动内容');
+    // 文本必须等于"接受全部修订后"的样子——那才是要写回线上的内容。
+    assert.equal(result.changes[0].modified.text, '截至评估基准日，尚未取得不动产权证书，具体如下：');
+    assert.equal(result.changes[0].modified.unsupported, false, '修订不再是不可比较对象');
+    // 但要如实告知用户：修订是按"接受"解释的，不是逐字解释。
+    assert.ok(result.modified.warnings.some(x => x.includes('accepted')));
+  });
+});
+
+test('修订模式下被删除的文字不计入改后文本（del 不算数）', () => {
+  // 接受修订后 w:del 里的文字就没了；如果把它拼进来，
+  // 改后文本会同时含新旧两版文字，写回线上就是错的。
+  const withDel = `<w:p><w:r><w:t>尚未取得不动产权</w:t></w:r><w:del w:id="8" w:author="张三" w:date="2026-11-23T10:00:00Z"><w:r><w:delText>证</w:delText></w:r></w:del><w:r><w:t>书，具体如下：</w:t></w:r></w:p>`;
+  withDocs(wrap(p('anchor') + p('尚未取得不动产权证书，具体如下：')), wrap(p('anchor') + withDel), (a, b) => {
+    const { result } = run(a, b);
+    assert.equal(result.changes.length, 1);
+    assert.equal(result.changes[0].type, 'candidate_change');
+    // delText 本来就不是 w:t，天然被跳过；这里锁定"不会再拼进来"。
+    assert.equal(result.changes[0].modified.text, '尚未取得不动产权书，具体如下：');
+  });
+});
+
 test('identical revision and formula paragraphs are not reported as changes, but are counted as unchecked', () => {
   const complex = `<w:p><w:ins><w:r><w:t>repeat</w:t></w:r></w:ins><m:oMath/></w:p>`;
   withDocs(wrap(p('repeat') + complex + p('repeat')), wrap(p('repeat') + complex + p('repeat')), (a, b) => {
@@ -62,6 +92,28 @@ test('identical revision and formula paragraphs are not reported as changes, but
     assert.equal(result.unsupportedUnchanged, 1);
   }, [['word/media/image.png', 'fake']]);
 });
+test('导出占位符 0.00 被抹平成空单元格时不算改动', () => {
+  // 天源导出/重新出稿会把表格里的 0.00 占位符清空，用户在 Word 里另存后
+  // 这些单元格就真的空了。这是导出噪声，不是用户改的内容。
+  const cell = v => `<w:tbl><w:tr><w:tc><w:p><w:r><w:t>${v}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`;
+  withDocs(wrap(p('anchor') + cell('0.00') + cell('0.00') + p('end')),
+           wrap(p('anchor') + cell('') + cell('') + p('end')), (a, b) => {
+    assert.deepEqual(run(a, b).result.changes, [], '表格里的 0.00 → 空 应被当作导出噪声跳过');
+  });
+});
+
+test('占位符规则只对表格单元格生效，正文的 0.00 不会被它吞掉', () => {
+  // 边界：正文里 0.00 → 另一个非空数字时，必须照常报改动。
+  // （0.00 → 空 的情况由既有的"空白段落不算改动"规则覆盖，不是占位符规则。）
+  withDocs(wrap(p('anchor') + p('0.00') + p('end')), wrap(p('anchor') + p('0.05') + p('end')), (a, b) => {
+    const changes = run(a, b).result.changes;
+    assert.equal(changes.length, 1, '正文数字改动必须报出来');
+    assert.equal(changes[0].type, 'candidate_change');
+    assert.equal(changes[0].baseline.text, '0.00');
+    assert.equal(changes[0].modified.text, '0.05');
+  });
+});
+
 test('identical repeated and empty paragraphs produce no false differences', () => {
   const xml = wrap(p('same') + p('same') + p('') + p('same'));
   withDocs(xml, xml, (a, b) => assert.deepEqual(run(a, b).result.changes, []));

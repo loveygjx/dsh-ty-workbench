@@ -631,3 +631,57 @@ test('两段式：确认后点「重新选择项目」会清空已读取的数�
   const sel = W.nodes(tree, n => n.type === 'select')[0];
   assert.equal(sel.props.value, '', '项目下拉应回到未选状态');
 });
+
+test('新增段落与删除段落必须单独成行，并说明是插/删而不是改字', async () => {
+  const fetch = makeFetch();
+  const { api, runtime } = loadClient(fetch.impl);
+  const W = makeWalker(api);
+  const changes = [
+    {
+      type: 'insertion',
+      after: { kind: 'paragraph', path: [0], text: '市场法是指…', unsupported: false },
+      before: null,
+      modified: [{ kind: 'paragraph', path: [1], text: '这是线下新加的一段', unsupported: false }],
+    },
+    {
+      type: 'deletion',
+      after: null,
+      before: null,
+      baseline: [{ kind: 'paragraph', path: [2], text: '这段被删掉了', unsupported: false }],
+    },
+  ];
+  const result = compareResult({
+    changes,
+    locate: {
+      available: true,
+      counts: { located: 2, refused: 0 },
+      located: [
+        {
+          index: 0, kind: 'insertion', baselineText: '', modifiedText: '这是线下新加的一段', unsupported: false,
+          candidate: { itemId: '900000000000020', itemIndex: [0], blockIndex: 2 },
+          matchedBy: 'anchor exact', anchorFrom: 'after', writebackAllowed: false, requiresHumanReview: true,
+        },
+        {
+          index: 1, kind: 'deletion', baselineText: '这段被删掉了', modifiedText: '', unsupported: false,
+          candidate: { itemId: '900000000000021', itemIndex: [0], blockIndex: 0 },
+          matchedBy: 'anchor exact', anchorFrom: 'self', deleteTexts: ['这段被删掉了'],
+          writebackAllowed: false, requiresHumanReview: true,
+        },
+      ],
+      refused: [],
+      writeChannel: { available: true, blocking: ['写回是整节点覆盖。'], requiresHumanReview: true },
+    },
+  });
+  const tree = await driveToResult(api, runtime, fetch, W, result);
+  const text = W.text(tree);
+  assert.match(text, /新增段落/, '插入行必须有「新增段落」标记');
+  assert.match(text, /删除段落/, '删除行必须有「删除段落」标记');
+  assert.match(text, /之后插入/, '插入行要说明插在哪一段之后');
+  assert.match(text, /（删除）/, '删除行要在位置列标明是删除');
+  assert.match(text, /这是线下新加的一段/, '新增内容必须可见');
+  assert.match(text, /这段被删掉了/, '被删内容必须可见');
+
+  // 两行都必须可勾选（都能写回），且写回条数按 2 处计
+  const boxes = W.checkboxes(tree).filter(b => b.props.disabled === false);
+  assert.ok(boxes.length >= 2, '新增与删除都该可勾选，实际可勾选 ' + boxes.length);
+});

@@ -176,16 +176,44 @@ export async function applyWriteback({
       const row = rows.find(r => String(r.itemId) === itemId) || rows[0];
       if (!row) { skipped.push({ itemId: label, reason: '线上读不到该节点' }); continue; }
       const original = typeof row.text === 'string' ? JSON.parse(row.text) : row.text;
+      const kind0 = String(item.kind || 'modify');
       const rawWanted = item.modifiedText || item.replacementText
         || (item.candidate && item.candidate.modifiedText);
-      if (!rawWanted) { skipped.push({ itemId: label, reason: '没有目标文本' }); continue; }
-      // Word 里的章节序号（「五、」之类）是天源生成时按节点顺序加的，不在节点正文里。
-      // 直接把带序号的文本写回线上会和生成器重复加一遍，必须先剥掉。
-      const wanted = stripNumberingPrefix(String(rawWanted));
+      // 删除没有"目标文本"——它要的是"把这几段拿掉"，所以不能在这里被挡掉。
+      if (kind0 !== 'deletion' && !rawWanted) { skipped.push({ itemId: label, reason: '没有目标文本' }); continue; }
 
       const blockIndex = item.blockIndex != null ? item.blockIndex : (item.candidate && item.candidate.blockIndex);
-      const next = replaceBlockText(original, blockIndex, wanted);
-      if (!next) { skipped.push({ itemId: label, reason: '段落在线上节点里对不上' }); continue; }
+      // 剥不剥序号，不能一律剥——要看**线上原文自己带不带**。
+      //
+      // 背景：天源生成 DOCX 时，有些章节序号是生成器按节点顺序加的，节点正文里没有
+      // （例如「(二) 截至评估基准日…」线上节点是「截至评估基准日…」）；但也有相当
+      // 多节点是把序号**直接写在正文里**的（实测同一个报告里「1．市场法」「(1) 必须
+      // 有一个…」都是字面量，DOCX 里 w:numPr/w:numId 出现 0 次，全是死文本）。
+      //
+      // 一律剥掉会把这些节点的序号从正文里删掉——用户改「1．市场法」为
+      // 「1．市场法（2024年修订）」，写回去却变成「市场法（2024年修订）」，序号丢了。
+      // 所以判据是原文：原文自带序号就保留（序号属于内容），原文没有才剥（序号是
+      // 生成器加的，写回带上会重复）。
+      const originalText = blockText(original, blockIndex);
+      const originalHasPrefix = typeof originalText === 'string' && originalText.trim() !== ''
+        && stripNumberingPrefix(originalText) !== originalText.trim();
+      const wanted = originalHasPrefix ? String(rawWanted).trim() : stripNumberingPrefix(String(rawWanted));
+
+      // 三种写回动作：改字（默认）、插段、删段。
+      // 插/删都不新建或删除节点——节点是段落数组，改数组即可（已实测服务端接受）。
+      const kind = String(item.kind || 'modify');
+      let next;
+      if (kind === 'insertion') {
+        const list = String(rawWanted).split('\n').map(t => t.trim()).filter(Boolean);
+        next = insertBlocksAfter(original, blockIndex, list, { before: item.anchorFrom === 'before' });
+        if (!next) { skipped.push({ itemId: label, reason: '插入位置在线上节点里对不上' }); continue; }
+      } else if (kind === 'deletion') {
+        next = deleteBlocksAt(original, blockIndex, item.deleteTexts || []);
+        if (!next) { skipped.push({ itemId: label, reason: '要删的段落在线上节点里对不上' }); continue; }
+      } else {
+        next = replaceBlockText(original, blockIndex, wanted);
+        if (!next) { skipped.push({ itemId: label, reason: '段落在线上节点里对不上' }); continue; }
+      }
 
       const lock = await acquireLock({ projectId, companyId, itemId, bin });
       if (!lock.acquired) { skipped.push({ itemId: label, reason: '拿不到编辑锁：' + (lock.holder || lock.detail || '') }); continue; }
@@ -199,11 +227,31 @@ export async function applyWriteback({
       const check = await readContents({ projectId, companyId, itemIds: [itemId], bin });
       const cText = typeof check[0].text === 'string' ? JSON.parse(check[0].text) : check[0].text;
       const got = blockText(cText, blockIndex);
-      if (got !== wanted) {
+      if (kind === 'insertion') {
+        // 插段后锚点段还在原位，新段落跟在它后面（或前面）
+        const wantBlocks = String(rawWanted).split('\n').map(t => t.trim()).filter(Boolean);
+        const gotBlocks = wantBlocks.map((_, i) => blockText(cText, blockIndex + (item.anchorFrom === 'before' ? i : i + 1)));
+        if (JSON.stringify(gotBlocks) !== JSON.stringify(wantBlocks)) {
+          failed.push({ itemId: label, reason: '写后核对不一致（插段）', expected: wantBlocks, got: gotBlocks });
+          continue;
+        }
+      } else if (kind === 'deletion') {
+        // 删完以后这些文字不应该还留在该节点的任何一段里
+        const all = (cText && Array.isArray(cText.content)) ? cText.content.map(b => plainText(b).trim()) : [];
+        const stillThere = (item.deleteTexts || []).filter(t => all.includes(String(t).trim()));
+        if (stillThere.length) {
+          failed.push({ itemId: label, reason: '写后核对不一致（删段仍在）', expected: '已删除', got: stillThere });
+          continue;
+        }
+      } else if (got !== wanted) {
         failed.push({ itemId: label, reason: '写后核对不一致', expected: wanted, got });
         continue;
       }
-      applied.push({ itemId: label, blockIndex, original: blockText(original, blockIndex), written: wanted });
+      applied.push({
+        itemId: label, blockIndex, kind,
+        original: blockText(original, blockIndex),
+        written: kind === 'deletion' ? '（已删除）' : wanted,
+      });
       if (typeof onProgress === 'function') onProgress({ done: applied.length, total: locate.located.length, itemId: label });
     } catch (e) {
       failed.push({ itemId: label, reason: String(e && e.message ? e.message : e) });
@@ -269,4 +317,68 @@ export function replaceBlockText(doc, blockIndex, text) {
   };
   const out = { ...doc, content: doc.content.map((n, i) => (i === blockIndex ? rebuilt : n)) };
   return out;
+}
+
+/**
+ * 在第 blockIndex 段之后（或之前）插入若干段新文字。
+ *
+ * 为什么不需要 item/create：节点本身就是 [段落, 段落, …] 的数组，增删段落就是
+ * 改这个数组的长度。已实测服务端接受长度变化的 content（16 段 → 17 段 → 16 段），
+ * 渲染也正常。所以「新建节点」和「增加段落」是两件事，后者不需要动节点树。
+ *
+ * 关键：新段落必须带 attrs 和 marks。线上渲染器遇到 paragraph.attrs === null 会抛
+ * `Cannot invoke "java.util.Map.get(Object)"`，缺 marks 会掉字体字号。
+ * 所以模板一律从锚点段落复制——它本来就是同一份文档里的正常段落。
+ */
+export function insertBlocksAfter(doc, blockIndex, texts, { before = false } = {}) {
+  if (!doc || !Array.isArray(doc.content)) return null;
+  const at = doc.content[blockIndex];
+  if (!at) return null;
+  const list = (Array.isArray(texts) ? texts : [texts]).map(t => String(t)).filter(t => t.trim() !== '');
+  if (!list.length) return null;
+  // 模板：优先用锚点段自己的字体标记与段落属性；锚点是空段时往前找第一段有内容的。
+  let proto = at;
+  const usable = b => b && Array.isArray(b.content) && b.content.some(c => c && c.type === 'text' && c.marks);
+  if (!usable(proto)) {
+    for (let k = blockIndex; k >= 0; k -= 1) { if (usable(doc.content[k])) { proto = doc.content[k]; break; } }
+  }
+  const protoRun = (proto.content || []).find(c => c && c.type === 'text' && c.marks);
+  const protoAttrs = proto.attrs && typeof proto.attrs === 'object'
+    ? { ...proto.attrs }
+    : { textAlign: 'justify', indent: 1, lineHeight: '150%' };
+  const made = list.map(text => {
+    const run = { type: 'text', text };
+    if (protoRun) run.marks = JSON.parse(JSON.stringify(protoRun.marks));
+    return { type: 'paragraph', attrs: { ...protoAttrs }, content: [run] };
+  });
+  const pos = before ? blockIndex : blockIndex + 1;
+  const out = doc.content.slice();
+  out.splice(pos, 0, ...made);
+  return { ...doc, content: out };
+}
+
+/**
+ * 删掉第 blockIndex 段（以及紧随其后、文本在 expectedTexts 里的连续段落）。
+ *
+ * 只删真正属于这次改动的段：Word 里删一句话往往连带少几个空段，那是排版噪声，
+ * 不该跟着删。所以按文本匹配，而不是按数量。
+ */
+export function deleteBlocksAt(doc, blockIndex, expectedTexts) {
+  if (!doc || !Array.isArray(doc.content)) return null;
+  const want = (Array.isArray(expectedTexts) ? expectedTexts : [expectedTexts])
+    .map(t => String(t).trim()).filter(Boolean);
+  if (!want.length) return null;
+  const at = doc.content[blockIndex];
+  if (!at) return null;
+  const out = doc.content.slice();
+  // 从后往前删，避免下标漂移。
+  const removed = [];
+  for (let k = blockIndex + want.length - 1; k >= blockIndex; k -= 1) {
+    const blk = out[k];
+    if (!blk) continue;
+    const txt = plainText(blk).trim();
+    if (want.includes(txt)) { out.splice(k, 1); removed.push(txt); }
+  }
+  if (!removed.length) return null;
+  return { ...doc, content: out };
 }

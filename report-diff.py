@@ -23,6 +23,12 @@ MAX_ELEMENTS = 1000000
 MAX_DEPTH = 128
 MAX_BLOCKS = 50000
 MAX_REQUEST = 64 * 1024
+# 天源导出/重新出稿时会把表格里的「0.00」占位符抹成空，用户在 Word 里打开、
+# 另存后这些单元格就真的空了。这不是用户改的内容，报出来只会把真正的修改淹掉
+# （实测浙江交投金属 V4：6 处全是这个形状，且全在两个「其中：长期股权投资」
+# 子行里）。只认"表格单元格 && 原文恰好是 0.00 && 改后为空"，不做泛化——
+# 正文里的 0.00 是真实数字，绝不能跳过。
+ZERO_PLACEHOLDER = '0.00'
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 M = 'http://schemas.openxmlformats.org/officeDocument/2006/math'
 
@@ -81,6 +87,9 @@ def parse(data, names):
     count = 0
     current = None
     body_seen = False
+    # 正在被"接受修订"删掉的文字深度：>0 时的 w:t 不计入段落文本。
+    # moveFrom 同理（移动的源位置，接受修订后那里的文字就没了）。
+    del_depth = [0]
     # Any ignored part means comparison is intentionally incomplete.
     if any(n.startswith('word/') and n.endswith('.xml') and n != 'word/document.xml' and
            (n.startswith(('word/header', 'word/footer', 'word/footnotes', 'word/endnotes', 'word/comments', 'word/glossary/'))) for n in names):
@@ -120,10 +129,21 @@ def parse(data, names):
             warnings.add('document contains unsupported objects, fields, content controls or formulas')
             if current is not None:
                 current['unsupported'] = True
-        if name.startswith(W + '}') and (local in ('ins', 'del', 'moveFrom', 'moveTo', 'delText') or local.endswith('PrChange')):
-            warnings.add('tracked revisions are not interpreted')
-            if current is not None:
-                current['unsupported'] = True
+        # 修订（Track Changes）按「全部接受」处理。
+        #
+        # 为什么不能像以前那样一见到 w:ins 就把整段标成 unsupported：用户在 Word
+        # 里开着修订改稿是最常见的做法，那样每一处真实改动都会变成"含变量/图片"、
+        # 被判不可写回——功能等于对最典型的用法失效（实测：同一处改动，未开修订
+        # 得到 candidate_change，开着修订得到 unpaired+unsupported）。
+        #
+        # 「接受修订」的语义就是：w:ins / w:moveTo 里的文字算数，
+        # w:del / w:moveFrom 里的文字不算数（w:delText 本来就不是 w:t，天然被跳过）。
+        # 于是段落文本恰好等于用户"接受全部修订后"的样子，正是要写回线上的内容。
+        if name.startswith(W + '}') and local in ('ins', 'moveTo'):
+            warnings.add('tracked revisions are interpreted as accepted')
+        if name.startswith(W + '}') and local in ('del', 'moveFrom'):
+            warnings.add('tracked revisions are interpreted as accepted')
+            del_depth[0] += 1
         if name == tag(W, 'p'):
             if current is not None:
                 current['unsupported'] = True
@@ -133,16 +153,20 @@ def parse(data, names):
                 direct = not ancestors
                 cell = bool(ancestors and ancestors[-1] == tag(W, 'tc'))
                 if direct or cell:
-                    current = {'kind': 'paragraph' if direct else 'table_cell_paragraph', 'path': path, 'text': '', 'unsupported': any(x.split('}')[-1] in ('ins', 'del', 'moveFrom', 'moveTo', 'sdt', 'txbxContent') for x in ancestors), '_depth': len(stack)}
+                    # ins/del/moveFrom/moveTo 已按"接受修订"处理，不再是 unsupported；
+                    # 只有 sdt（内容控件）和 txbxContent（文本框）仍不可比较。
+                    current = {'kind': 'paragraph' if direct else 'table_cell_paragraph', 'path': path, 'text': '', 'unsupported': any(x.split('}')[-1] in ('sdt', 'txbxContent') for x in ancestors), '_depth': len(stack)}
                 else:
                     warnings.add('paragraphs in unsupported body containers are not compared')
         if current is not None and name in (tag(W, 'tab'), tag(W, 'br'), tag(W, 'cr')):
             current['text'] += '\t' if name == tag(W, 'tab') else '\n'
     def chars(value):
-        if current is not None and stack and stack[-1]['name'] == tag(W, 't'):
+        if current is not None and del_depth[0] == 0 and stack and stack[-1]['name'] == tag(W, 't'):
             current['text'] += value
     def end(name):
         nonlocal current
+        if name.startswith(W + '}') and name.split('}')[-1] in ('del', 'moveFrom') and del_depth[0] > 0:
+            del_depth[0] -= 1
         if current is not None and name == tag(W, 'p') and len(stack) == current['_depth']:
             del current['_depth']
             blocks.append(current)
@@ -176,8 +200,16 @@ def compare(a, b):
             return True
         # 只有一个空格与完全空白的差别不是"改动"：天源生成件里这类空段落很多，
         # 逐条报出来只会把真正的修改淹掉。
-        return (x['kind'] == y['kind'] and not x['unsupported'] and not y['unsupported']
-                and not x['text'].strip() and not y['text'].strip())
+        if (x['kind'] == y['kind'] and not x['unsupported'] and not y['unsupported']
+                and not x['text'].strip() and not y['text'].strip()):
+            return True
+        # 导出占位符被抹平：表格单元格里 0.00 → 空。见 ZERO_PLACEHOLDER 的说明。
+        # 只比表格单元格；正文段落的 0.00 是真实数字，不能当噪声吞掉。
+        if (x['kind'] == 'table_cell_paragraph' and y['kind'] == 'table_cell_paragraph'
+                and not x['unsupported'] and not y['unsupported']
+                and x['text'].strip() == ZERO_PLACEHOLDER and not y['text'].strip()):
+            return True
+        return False
     ca = collections.Counter(map(key, a))
     cb = collections.Counter(map(key, b))
     positions = {key(x): i for i, x in enumerate(b)
@@ -203,7 +235,7 @@ def compare(a, b):
     anchors.reverse()
     changes = []
     unsupported_same = 0
-    def gap(left, right):
+    def gap(left, right, after=None, before=None):
         nonlocal unsupported_same
         if not left and not right:
             return
@@ -212,6 +244,21 @@ def compare(a, b):
         # 让界面能说明"N 处含公式或图片，未做逐字节比较"。
         if len(left) == len(right) and all(same_block(x, y) for x, y in zip(left, right)):
             unsupported_same += sum(1 for x in left if x['unsupported'])
+            return
+        # 先判"等价"再判增删：表格里 0.00 → 空 这种导出噪声两侧段数相同、
+        # same_block 为真，如果先判增删就会被当成"删了一段 0.00"。
+        # 新增/删除的判定要忽略空白段落：删掉一句正文时，Word 往往连带少几个
+        # 空段（实测删 1 句，左 5 段右 4 段，其中 4 段本来就空）。不先滤掉空白，
+        # 就永远判不成"纯删除"，只能退回 unpaired。
+        left_real = [x for x in left if str(x.get('text') or '').strip()]
+        right_real = [y for y in right if str(y.get('text') or '').strip()]
+        # 纯新增：改稿有实质内容、原稿这段位置没有。
+        if not left_real and right_real:
+            changes.append({'type': 'insertion', 'after': after, 'before': before, 'modified': right_real})
+            return
+        # 纯删除：原稿有实质内容、改稿这段没了。
+        if left_real and not right_real:
+            changes.append({'type': 'deletion', 'baseline': left_real, 'after': after, 'before': before})
             return
         # 两侧段数与类型完全对齐时逐位配对。真实文档里一处文字改动常被上下
         # 若干空段落夹住（正文里空行很多），整段按"未配对"报掉的话用户根本
@@ -240,7 +287,22 @@ def compare(a, b):
             changes.append({'type': 'unpaired', 'baseline': left, 'modified': right, 'reason': 'ambiguous, repeated, unsupported or structural change'})
     i = j = 0
     for ai, bj in anchors + [(len(a), len(b))]:
-        gap(a[i:ai], b[j:bj])
+        # 插入/删除的位置靠"前一段实质内容"确定。不能直接用 a[i-1]：
+        # 天源生成件里空段落极多，紧挨着的那段十有八九是空的，拿它当锚点
+        # 定位不到任何节点。往回找到第一段有文字的才算数。
+        anchor = None
+        for k in range(i - 1, -1, -1):
+            if str(a[k].get('text') or '').strip():
+                anchor = a[k]
+                break
+        # 文首新增/删除时前面没有段落可锚，只能往后找。锚在后面时写回语义变成
+        # 「插到它前面 / 删掉它前面那几段」，由 before 标记区分。
+        forward = None
+        for k in range(ai, len(a)):
+            if str(a[k].get('text') or '').strip():
+                forward = a[k]
+                break
+        gap(a[i:ai], b[j:bj], anchor, forward)
         i, j = ai + 1, bj + 1
     return changes, unsupported_same
 

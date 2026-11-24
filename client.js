@@ -2149,8 +2149,7 @@ window.__ModuleLoader__.load({
         else if (kind === 'sidebar') toast('已在右侧栏打开' + label);
         else toast('自动开窗被拦，请手动打开：' + url, 'warn');
       };
-      // 同步窗口（ego task space「workbench-sync」）的登录态检查：顺带把那个窗口打开。
-      // ego 的 task space 之间 cookie 隔离，所以天源必须在**这个窗口**里登录一次。
+      // 同步通道体检：打开天源首页看你的 Chrome 里是否已登录（只读，不写数据）。
       const checkTyLogin = async () => {
         if (tyLoginBusy) return tyLogin;
         setTyLoginBusy(true);
@@ -2167,9 +2166,9 @@ window.__ModuleLoader__.load({
           setTyLoginBusy(false);
         }
       };
-      // 自动填表：宿主 spawn ego-browser，在独立 task space 里把四组页签填进天源网页表单。
+      // 自动填表：宿主用 opencli 驱动你自己的 Chrome，把四组页签填进天源网页表单。
       // 注意天源保存接口永远返回 HTTP 200，成败由引擎「保存后回读」判定，所以这里只信 ok 字段。
-      const doSync = async (claimSpace) => {
+      const doSync = async () => {
         if (upBusy) return;
         setUpBusy(true);
         setUpRes(null);
@@ -2178,14 +2177,14 @@ window.__ModuleLoader__.load({
             const st = await checkTyLogin();
             if (!st || st.loggedIn !== true) {
               setUpRes({ ok: false, msg: '同步通道不可用：' + ((st && st.msg) || '未知原因') });
-              toast('同步通道不可用：先在 ego 同步窗口里登录天源（点「打开登录窗口」），或在 Edge 里登录后走 bridge 回退', 'warn');
+              toast('同步通道不可用：先在你的 Chrome 里登录天源（点「检查登录状态」）', 'warn');
               return;
             }
           }
           const r = await fetch(PREFIX + '/ty/sync', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ project: f, claimSpace: !!claimSpace }),
+            body: JSON.stringify({ project: f }),
           });
           const d = await r.json().catch(() => ({ ok: false, msg: 'HTTP ' + r.status }));
           setUpRes(d);
@@ -2234,9 +2233,7 @@ window.__ModuleLoader__.load({
           '线上项目编号：' + (upRes.online.code || '—')
           + ' · 受理号：' + (upRes.online.acceptNo || '—')
           + (upRes.online.name ? '（' + upRes.online.name + '）' : '')) : null,
-        h('div', { style: { color: '#666' } }, '通道：' + (upRes.engine === 'bridge'
-          ? ('Edge（agent-browser-cli 回退）' + (upRes.fallbackFrom === 'ego' ? ' · ego 原因：' + (upRes.egoMsg || '—') : ''))
-          : 'ego (lite) 浏览器' + (upRes.fallbackFrom ? ' · 回退自 ' + upRes.fallbackFrom : ''))),
+        h('div', { style: { color: '#666' } }, '通道：opencli 驱动你的 Chrome' + (upRes.cdpCalls ? (' · ' + upRes.cdpCalls + ' 次往返') : '')),
         upRes.applied && upRes.applied.length ? h('div', null, '已填 ' + upRes.applied.length + ' 项：' + upRes.applied.join('、')) : null,
         upRes.mismatches && upRes.mismatches.length ? h('div', { style: { color: '#c0392b' } }, '回读不一致：' + upRes.mismatches.join('；')) : null,
         (upRes.notes || []).length ? h('div', { style: { color: '#8a6d3b' } }, (upRes.notes || []).join('；')) : null,
@@ -2244,33 +2241,27 @@ window.__ModuleLoader__.load({
       ) : null;
       const upModal = upOpen ? h(Modal, { title: '同步到线上 · 天源', onClose: () => setUpOpen(false) },
         h('p', { className: 'wb-hint', style: { marginTop: 0 } },
-          '「同步到天源（自动填表）」调用 ego (lite) 浏览器：在「workbench-sync」窗口里按四组页签逐项填写并保存，保存后自动回读校验。'
-          + '前提是这个窗口里登录着天源（点下面「打开登录窗口」）；ego 未登录或起不来时自动退回 Edge（agent-browser-cli）通道。'
+          '「同步到天源（自动填表）」用 opencli 驱动你自己的 Chrome：按四组页签逐项填写并保存，保存后自动回读校验。'
+          + '前提是你的 Chrome 里登录着天源（点下面「检查登录状态」）。'
           + '天源开放接口只允许读项目和写「参与人员 / 公司负责人」，其余写入只能在网页表单里做，所以下面仍保留清单，供手工核对。'
           + (f.tyId ? '本项目已关联天源（ID ' + f.tyId + '）。' : '本项目还没有关联天源项目，将走「线上新建」。')),
         h('div', { className: 'wb-row', style: { marginBottom: 10 } },
-          h('button', { type: 'button', className: 'pf-btn pri', disabled: upBusy, onClick: () => doSync(false) },
+          h('button', { type: 'button', className: 'pf-btn pri', disabled: upBusy, onClick: () => doSync() },
             upBusy ? '同步中…（约 1 分钟）' : '同步到天源（自动填表）'),
-          // 同步窗口被你点过之后 ego 会判成「人工窗口」，引擎不能自己接管；
-          // 这里给一个显式的接管入口，点一下就是授权。
-          upRes && upRes.code === 'SPACE_OWNED'
-            ? h('button', { type: 'button', className: 'pf-btn', disabled: upBusy, onClick: () => doSync(true) },
-              upBusy ? '接管中…' : '接管同步窗口并重试')
-            : null,
           h('button', { type: 'button', className: 'pf-btn', onClick: copyUp }, '复制全部'),
           h('button', { type: 'button', className: 'pf-btn', onClick: () => openTy(TY_BASE, '天源新建项目页') }, '打开线上新建项目'),
           f.tyId ? h('button', { type: 'button', className: 'pf-btn', onClick: () => openTy(tyProjectUrl(f.tyId), '该项目页') }, '打开该项目') : null),
         h('div', { className: 'wb-row', style: { marginBottom: 8, alignItems: 'center' } },
           h('span', { style: { fontSize: 12, color: tyLogin && tyLogin.loggedIn ? '#1e7e34' : '#8a6d3b', marginRight: 8 } },
-            tyLoginBusy ? '正在检查同步窗口…'
-              : tyLogin == null ? '同步窗口：未检查'
-                : tyLogin.loggedIn ? '同步窗口：已登录天源 ✓'
-                  : '同步窗口：未登录天源'),
+            tyLoginBusy ? '正在检查浏览器…'
+              : tyLogin == null ? '浏览器：未检查'
+                : tyLogin.loggedIn ? '浏览器：已登录天源 ✓'
+                  : '浏览器：未登录天源'),
           h('button', {
             type: 'button', className: 'pf-btn sm', disabled: tyLoginBusy,
-            title: '打开 ego 的 workbench-sync 窗口；未登录时停在统一认证登录页',
+            title: '检查你的 Chrome 里是否已登录天源（只读，不写数据）',
             onClick: () => checkTyLogin(),
-          }, tyLoginBusy ? '检查中…' : (tyLogin && tyLogin.loggedIn ? '打开同步窗口' : '打开登录窗口'))),
+          }, tyLoginBusy ? '检查中…' : '检查登录状态')),
         syncPanel,
         h('pre', {
           style: { maxHeight: 420, overflow: 'auto', margin: 0, padding: '12px 14px', borderRadius: 8, background: '#f7f8fa', border: '1px solid #e6e8ee', fontSize: 12, lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
@@ -4380,7 +4371,7 @@ window.__ModuleLoader__.load({
         setReportDialog({
           token, project: p, status: 'confirm',
           method: 'web',              // web=网页端原生（默认，内容最全）| json=本地重建
-          engine: 'browser',          // browser=你的真实浏览器（共享登录态，默认）| ego=独立 ego 窗口
+          engine: 'browser',          // 只走你的真实浏览器（共享登录态）
           companies: [], selected: [], loadingCompanies: true,
           types: [1, 2], mode: 'current',   // current=导出当前版本 | refresh=生成新版本
           webProbe: null, webReports: null,
@@ -4388,20 +4379,20 @@ window.__ModuleLoader__.load({
           outputDir: '', jobId: null, message: '',
         });
         setReportDialog(prev => prev && ({ ...prev, selTypes: {} }));
-        // 并行：读取公司×类型矩阵（ego company/list 的 reportConfigList）+ 探测登录态与现有报告
+        // 并行：读取公司×类型矩阵（company/list 的 reportConfigList）+ 探测登录态与现有报告
         (async () => {
           const projectId = numericId(p.id);
           if (!projectId) { setReportDialog(d => d && d.token === token ? { ...d, loadingCompanies: false, companyError: '项目 ID 不是有效数字' } : d); return; }
           // 先自检浏览器通道；扩展被回收时自动重连一次（实测 1~2 秒），避免面板干等
           try {
-            const bh = await fetch(PREFIX + '/ty/ego/bridge', { cache: 'no-store' }).then(r => r.json()).catch(() => null);
+            const bh = await fetch(PREFIX + '/ty/browser/bridge', { cache: 'no-store' }).then(r => r.json()).catch(() => null);
             if (bh && bh.ok === false && bh.code === 'BRIDGE_DISCONNECTED') {
-              await fetch(PREFIX + '/ty/ego/bridge', { method: 'POST' }).then(r => r.json()).catch(() => null);
+              await fetch(PREFIX + '/ty/browser/bridge', { method: 'POST' }).then(r => r.json()).catch(() => null);
             }
           } catch (_) { /* 自检失败不阻断主流程，后面读取会给出真实原因 */ }
           const [co, web] = await Promise.all([
-            fetch(PREFIX + '/ty/ego/companies?projectId=' + encodeURIComponent(projectId) + '&engine=browser', { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
-            fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=browser', { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+            fetch(PREFIX + '/ty/browser/companies?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+            fetch(PREFIX + '/ty/browser/probe?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
           ]);
           const list = (co && co.ok && Array.isArray(co.companies)) ? co.companies : [];
           const selTypes = {};
@@ -4458,8 +4449,8 @@ window.__ModuleLoader__.load({
 
         if (d0.method === 'web') {
           try {
-            const r = await fetch(PREFIX + '/ty/ego/export', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ jobId, projectId, engine: d0.engine === 'ego' ? 'ego' : 'browser', applyFormat: d0.applyFormat !== false, items: items.map(i => ({ companyId: i.companyId, companyName: i.companyName, type: i.type, mode: i.mode })), outputDir: d0.outputDir || undefined, projectCode: d0.project.projectCode || '', projectName: d0.project.projectName || '' }) });
+            const r = await fetch(PREFIX + '/ty/browser/export', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jobId, projectId, applyFormat: d0.applyFormat !== false, items: items.map(i => ({ companyId: i.companyId, companyName: i.companyName, type: i.type, mode: i.mode })), outputDir: d0.outputDir || undefined, projectCode: d0.project.projectCode || '', projectName: d0.project.projectName || '' }) });
             const j = await r.json().catch(() => null);
             if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || ('HTTP ' + r.status));
             const poll = async () => {
@@ -4528,69 +4519,28 @@ window.__ModuleLoader__.load({
                 k === 'web' && d.webProbe && !webOk ? h('span', { className: 'wb-hint', style: { color: 'var(--dsw-alias-state-error-primary,#c0392b)' } }, '　不可用：' + (d.webProbe.error || (d.webProbe.logged === false ? '天源未登录' : '未知'))) : null,
                 h('div', { className: 'wb-hint', style: { marginLeft: 22 } }, desc)))) ,
 
-          // 浏览器选择（仅原生模式）：默认用你自己已登录的浏览器，避免重复扫码
-          isWeb ? h('div', { className: 'wb-sec', style: { marginTop: 14 } },
-            h('div', { className: 'wb-sec-h' }, h('h2', null, '用哪个浏览器')),
-            [['browser', '我的浏览器（推荐）', '直接驱动你日常使用的 Chrome：登录态就是你现在网页上的登录态，不用再扫码。导出时会在同一个窗口里开一个后台标签页取文件，取完自动关掉。'],
-             ['ego', 'ego 独立窗口', '在工作台专属的 ego 窗口里操作；登录态与你的浏览器隔离，需要在该窗口单独扫码登录一次。']].map(([k, t, desc]) =>
-              h('label', { key: k, style: { display: 'block', padding: '7px 0', cursor: d.status === 'confirm' ? 'pointer' : 'default', opacity: d.status === 'confirm' ? 1 : .6 } },
-                h('input', { type: 'radio', name: 'rd-engine', checked: (d.engine || 'browser') === k, disabled: d.status !== 'confirm',
-                  onChange: async () => {
-                    update({ engine: k, webProbe: null, webReports: null, companies: [], selected: [], selTypes: {}, loadingCompanies: true, companyError: '', companyExpired: false, companyBridgeDown: false });
-                    const projectId = numericId(d.project.id);
-                    if (!projectId) return;
-                    const [co, web] = await Promise.all([
-                      fetch(PREFIX + '/ty/ego/companies?projectId=' + encodeURIComponent(projectId) + '&engine=' + k, { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
-                      fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + k, { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
-                    ]);
-                    const list = (co && co.ok && Array.isArray(co.companies)) ? co.companies : [];
-                    const selTypes = {};
-                    for (const c of list) selTypes[String(c.id)] = (c.types || []).slice().sort();
-                    update({
-                      companies: list,
-                      selected: list.filter(c => (c.types || []).length).map(c => c.id),
-                      selTypes, loadingCompanies: false,
-                      companyError: (co && !co.ok) ? (co.error || '读取公司列表失败') : '',
-                      companyExpired: !!(co && !co.ok && co.code === 'NOT_LOGGED_IN'),
-            companyBridgeDown: !!(co && !co.ok && co.code === 'BRIDGE_DISCONNECTED'),
-                      webProbe: web,
-                      webReports: (web && web.ok && web.logged && Array.isArray(web.reports)) ? web.reports : null,
-                    });
-                  } }),
-                h('b', null, ' ' + t),
-                h('div', { className: 'wb-hint', style: { marginLeft: 22 } }, desc)))) : null,
 
           isWeb && webOk ? h('div', { className: 'wb-hint', style: { marginTop: 6 } },
-            (d.engine === 'ego' ? 'ego 窗口已登录天源' : '已连接你的浏览器，登录态正常'),
+            '已连接你的浏览器，登录态正常',
             ' · 系统现有 ' + ((d.webReports || []).length) + ' 份文档',
             h(Btn, { className: 'sm', style: { marginLeft: 8 }, disabled: d.status !== 'confirm', onClick: async () => {
                 const projectId = numericId(d.project.id);
-                const rr = await fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + (d.engine || 'browser'), { cache: 'no-store' }).then(x => x.json()).catch(() => null);
+                const rr = await fetch(PREFIX + '/ty/browser/probe?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(x => x.json()).catch(() => null);
                 if (rr && rr.ok && rr.logged) update({ webProbe: rr, webReports: rr.reports || [], tyLoginError: '' });
                 else update({ webProbe: rr || { ok: false, logged: false }, tyLoginError: (rr && (rr.error || rr.msg)) || '重新检测失败' });
               } }, '重新检测')) : null,
           isWeb && d.webProbe && !webOk && d.status === 'confirm' ? h('div', { className: 'wb-sec', style: { marginTop: 8, padding: 10 } },
-            h('div', { className: 'wb-label' }, d.engine === 'ego' ? '需要在 ego 窗口登录天源' : '需要用你已登录天源的浏览器'),
+            h('div', { className: 'wb-label' }, '需要用你已登录天源的浏览器'),
             h('div', { className: 'wb-hint', style: { marginBottom: 6 } },
-              d.engine === 'ego'
-                ? 'ego 是工作台专属的独立浏览器窗口，登录态与你的浏览器隔离。点下方按钮打开该窗口，在其中扫码登录天源一次即可。'
-                : '这个功能通过 opencli 驱动你正在用的 Chrome（不读取、不导出 Cookie，也不改动天源接口）。请先在天源网页上完成登录，并保持 Chrome 开着，然后点「重新检测」。'),
-            (d.webProbe && d.webProbe.code === 'NO_OPENCLI') ? h('div', { className: 'wb-alert danger', style: { marginBottom: 6 } }, '未找到 opencli（浏览器通道）。请安装 opencli 后重试，或切换到 ego 独立窗口。') : null,
+              '这个功能通过 opencli 驱动你正在用的 Chrome（不读取、不导出 Cookie，也不改动天源接口）。请先在天源网页上完成登录，并保持 Chrome 开着，然后点「重新检测」。'),
+            (d.webProbe && d.webProbe.code === 'NO_OPENCLI') ? h('div', { className: 'wb-alert danger', style: { marginBottom: 6 } }, '未找到 opencli（浏览器通道）。请安装 opencli 后重试。') : null,
             h('div', { className: 'wb-row' },
-              d.engine === 'ego' ? h(Btn, { className: 'sm', disabled: d.tyLogging, onClick: async () => {
-                update({ tyLogging: true, tyLoginError: '已打开 ego 登录窗口，请在其中扫码登录天源…' });
-                try {
-                  const lr = await fetch(PREFIX + '/ty/ego/login', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, msg: String(e.message || e) }));
-                  update({ tyLoginError: (lr && (lr.msg || lr.error)) || '已打开登录窗口，扫码后点「重新检测」' });
-                } catch (e) { update({ tyLoginError: String(e.message || e) }); }
-                update({ tyLogging: false });
-              } }, '打开 ego 登录窗口') : h('span', { className: 'wb-hint' }, '请在你的 Chrome 里登录天源后点右侧按钮。'),
+              h('span', { className: 'wb-hint' }, '请在你的 Chrome 里登录天源后点右侧按钮。'),
               h(Btn, { variant: 'pri', disabled: d.tyLogging, onClick: async () => {
                 update({ tyLogging: true, tyLoginError: '' });
                 try {
                   const projectId = numericId(d.project.id);
-                  const eng = d.engine === 'ego' ? 'ego' : 'browser';
-                  const rr = await fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + eng, { cache: 'no-store' }).then(x => x.json());
+                  const rr = await fetch(PREFIX + '/ty/browser/probe?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(x => x.json());
                   if (rr && rr.ok && rr.logged) update({ webProbe: rr, webReports: rr.reports || [], tyLoginError: '' });
                   else update({ webProbe: rr || { ok: false, logged: false }, tyLoginError: (rr && (rr.error || rr.msg)) || '仍未登录' });
                 } catch (e) { update({ tyLoginError: String(e.message || e) }); }
@@ -4641,21 +4591,8 @@ window.__ModuleLoader__.load({
             d.loadingCompanies ? h('div', { className: 'wb-hint' }, '正在读取公司×类型矩阵…')
               : d.companyError ? h('div', { className: 'wb-alert danger' },
                   h('div', null, '读取公司失败：' + d.companyError),
-                  d.companyExpired ? h('div', { style: { marginTop: 8 } },
-                    h(Btn, {
-                      className: 'sm',
-                      disabled: d.tyLogging,
-                      onClick: async () => {
-                        update({ tyLogging: true, companyExpired: false });
-                        try {
-                          const lr = await fetch(PREFIX + '/ty/ego/login', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, msg: String(e.message || e) }));
-                          update({ tyLoginError: (lr && (lr.msg || lr.error)) || '已打开登录窗口，请在该窗口扫码登录，然后点「重新检测」' });
-                        } catch (e) { update({ tyLoginError: String(e.message || e) }); }
-                        update({ tyLogging: false });
-                      },
-                    }, '打开天源登录窗口'),
-                    h('span', { className: 'wb-hint', style: { marginLeft: 8 } },
-                      '在弹出的浏览器窗口里扫码登录，完成后点「重新检测」。'))
+                  d.companyExpired ? h('div', { className: 'wb-hint', style: { marginTop: 8 } },
+                    '天源未登录：请在你的 Chrome 里登录天源后点下面的「重新检测」。')
                   : d.companyBridgeDown ? h('div', { style: { marginTop: 8 } },
                     h(Btn, {
                       className: 'sm',
@@ -4663,7 +4600,7 @@ window.__ModuleLoader__.load({
                       onClick: async () => {
                         // 先尝试自动重连 daemon（扩展会自己回来），再重新读取
                         update({ tyLogging: true, tyLoginError: '正在尝试重连浏览器…' });
-                        const rec = await fetch(PREFIX + '/ty/ego/bridge', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, error: String(e.message || e) }));
+                        const rec = await fetch(PREFIX + '/ty/browser/bridge', { method: 'POST' }).then(x => x.json()).catch(e => ({ ok: false, error: String(e.message || e) }));
                         update({ tyLoginError: rec && rec.ok ? '' : String((rec && rec.error) || '自动重连失败') });
                         update({ tyLogging: false });
                       },
@@ -4676,8 +4613,8 @@ window.__ModuleLoader__.load({
                         update({ tyLogging: true, companyBridgeDown: false, companyError: '', loadingCompanies: true });
                         const projectId = numericId(d.project.id);
                         const [co, web] = await Promise.all([
-                          fetch(PREFIX + '/ty/ego/companies?projectId=' + encodeURIComponent(projectId) + '&engine=' + (d.engine || 'browser'), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
-                          fetch(PREFIX + '/ty/ego/probe?projectId=' + encodeURIComponent(projectId) + '&engine=' + (d.engine || 'browser'), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+                          fetch(PREFIX + '/ty/browser/companies?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
+                          fetch(PREFIX + '/ty/browser/probe?projectId=' + encodeURIComponent(projectId), { cache: 'no-store' }).then(r => r.json()).catch(e => ({ ok: false, error: String(e.message || e) })),
                         ]);
                         const list = (co && co.ok && Array.isArray(co.companies)) ? co.companies : [];
                         const selTypes = {};
@@ -4694,7 +4631,6 @@ window.__ModuleLoader__.load({
                         });
                       },
                     }, '重新检测'),
-                    h(Btn, { className: 'sm', style: { marginLeft: 8 }, disabled: d.status !== 'confirm', onClick: () => update({ engine: 'ego', companyBridgeDown: false, companyError: '', loadingCompanies: true }) }, '改用 ego 窗口'),
                     h('div', { className: 'wb-hint', style: { marginTop: 6 } },
                       '先在 Chrome 里确认「OpenCLI」扩展是启用状态（地址栏输入 chrome://extensions 查看），再点「重新检测」。'))
                   : null)
@@ -8699,6 +8635,8 @@ window.__ModuleLoader__.load({
       'media, embedded objects and charts are not compared': '图片、嵌入对象和图表未比对',
       'document contains unsupported objects, fields, content controls or formulas': '包含不支持的对象、域、内容控件或公式',
       'tracked revisions are not interpreted': '未解析修订记录',
+      // 新版按"接受修订"解释：改动内容会算数，所以这条是说明而非限制。
+      'tracked revisions are interpreted as accepted': '修订记录按「接受全部修订」解释（改动内容已计入）',
       'nested paragraphs are not fully compared': '嵌套段落未完整比对',
       'paragraphs in unsupported body containers are not compared': '不支持的正文容器内段落未比对',
       'formatting, layout, numbering, relationships and non-body content are not compared': '格式、版式、编号、关联关系及正文外内容未比对',
@@ -8715,6 +8653,38 @@ window.__ModuleLoader__.load({
       return (n / 1024 / 1024).toFixed(1) + ' MB';
     }
     // 含变量 / 图片 / 附件：这类段落替换整段会丢结构，写回一律不碰。
+    // 未配对的原因要分开说。以前无论哪种情况都标"含变量 / 图片"，
+    // 用户看到的是一堆看不懂的标签，实际可能只是段落重复或结构变化。
+    // 未配对的原因不能靠猜。宿主在 locate 阶段做了事实判断：这段文字线上节点里到底
+    // 有没有（inline）、报告里有没有上传的 Word 附件节点（attachment）。
+    // 有 refuses 项就照它说；没有才退回本地按形状推断。
+    function rcUnpairReason(change, miss) {
+      if (miss && typeof miss === 'object') {
+        // 宿主已经判清了的，一律照它说：
+        // 线下新增 / 线下删除 / 表格变量 / 上传附件 / 线上有但配不上 —— 处置方式完全不同。
+        if (miss.added === true) return '线下新增';
+        if (miss.deleted === true) return '线下删除';
+        if (miss.table === true) return '表格变量';
+        if (miss.attachment === true) return '上传的 Word 附件';
+        if (miss.inline === true) return '重复或结构变化';
+      }
+      const flag = item => !!(item && typeof item === 'object' && item.unsupported === true);
+      const left = Array.isArray(change && change.baseline) ? change.baseline : [];
+      const right = Array.isArray(change && change.modified) ? change.modified : [];
+      const anyUnsupported = left.some(flag) || right.some(flag);
+      const nonEmpty = left.concat(right).filter(x => String((x && x.text) || '').trim());
+      if (anyUnsupported) return '含变量 / 图片';
+      if (!left.length && right.length) return '线下新增';
+      if (left.length && !right.length) return '线下删除';
+      if (left.length !== right.length) return '段落数不同';
+      if (!nonEmpty.length) return '空白段落';
+      return '重复或结构变化';
+    }
+    // 附件内容说清楚代价：线上只能整份替换文件，改字做不到。
+    function rcUnpairNote(change, miss) {
+      if (miss && typeof miss === 'object' && miss.note) return miss.note;
+      return '这几段没法可靠对应到线上某一处，需人工核对';
+    }
     function rcUnsupported(change) {
       const flag = item => !!(item && typeof item === 'object' && item.unsupported === true);
       if (!change || typeof change !== 'object') return false;
@@ -8886,7 +8856,11 @@ window.__ModuleLoader__.load({
       const locatedByIndex = useMemo(() => new Map(located.map(x => [Number(x && x.index), x])), [located]);
       const refusedByIndex = useMemo(() => new Map(refused.map(x => [Number(x && x.index), x])), [refused]);
       const unsupportedCount = changes.filter(rcUnsupported).length;
-      const candidateRows = changes.map((c, i) => ({ change: c, index: i })).filter(r => r.change && r.change.type === 'candidate_change');
+      // 候选行 = 改字 + 插段 + 删段。后两种在线上不是"改某一段"，而是改节点里的段落数组，
+      // 所以列里要说清是"插在哪一段后面"或"删掉哪一段"，不能只给原文/改后两列。
+      const candidateRows = changes.map((c, i) => ({ change: c, index: i }))
+        .filter(r => r.change && (r.change.type === 'candidate_change'
+          || r.change.type === 'insertion' || r.change.type === 'deletion'));
       const unpairedRows = changes.map((c, i) => ({ change: c, index: i })).filter(r => r.change && r.change.type === 'unpaired');
 
       // 写回闸门：必须「全部改动都定位唯一」。
@@ -9105,22 +9079,36 @@ window.__ModuleLoader__.load({
           const miss = refusedByIndex.get(index);
           const blockable = !!hit && !rcUnsupported(change);
           const disabled = !canWriteback || !blockable;
+          const isIns = change.type === 'insertion';
+          const isDel = change.type === 'deletion';
           const pos = hit && hit.candidate
             ? h('div', null,
               h('div', { className: 'rc-pos' }, '节点 ' + String(hit.candidate.itemId)),
-              h('div', { className: 'rc-pos' }, '第 ' + (Number(hit.candidate.blockIndex) + 1) + ' 段' + (hit.matchedBy === 'stripped numbering prefix' ? '（去序号匹配）' : '')))
+              h('div', { className: 'rc-pos' },
+                '第 ' + (Number(hit.candidate.blockIndex) + 1) + ' 段'
+                + (isIns ? (hit.anchorFrom === 'before' ? ' 之前插入' : ' 之后插入') : isDel ? '（删除）' : '')
+                + (hit.matchedBy === 'stripped numbering prefix' ? '（去序号匹配）' : '')))
             : h('div', null,
               h('span', { className: 'wb-tag warn' }, rcUnsupported(change) ? '不可写回' : '需人工核对'),
               h('div', { className: 'wb-hint', style: { marginTop: 2 } }, rcShort((miss && miss.reason) || '未定位到线上节点', 60)));
+          // 插段/删段的 baseline/modified 是段落数组，不是单段对象，展示要分开处理。
+          const leftNodes = isIns ? [] : (isDel ? (change.baseline || []) : (change.baseline ? [change.baseline] : []));
+          const rightNodes = isDel ? [] : (isIns ? (change.modified || []) : (change.modified ? [change.modified] : []));
+          const kindTag = isIns ? h('span', { className: 'wb-tag green', style: { marginRight: 4 } }, '新增段落')
+            : isDel ? h('span', { className: 'wb-tag grey', style: { marginRight: 4 } }, '删除段落') : null;
           return h('tr', { key: index, className: disabled && !hit ? 'rc-dim' : '', style: rcUnsupported(change) ? { opacity: 0.5 } : null },
             h('td', null, h('input', {
               type: 'checkbox', checked: checked.has(index), disabled,
               title: disabled ? (canWriteback ? '含变量或图片，不能写回' : gateReason) : '勾选后才写回这一处',
               onChange: () => toggle(index),
             })),
-            h('td', null, cellOriginal(change.baseline && change.baseline.text)),
-            h('td', null, cellModified(change.modified && change.modified.text)),
-            h('td', null, pos));
+            h('td', null, leftNodes.length
+              ? h('div', { className: 'rc-cell rc-del' }, leftNodes.map((n, i) => h('div', { key: i }, rcShort((n && n.text) || '', 300))))
+              : h('div', { className: 'rc-cell' }, h('span', { className: 'wb-hint' }, isIns ? '（线上没有这段）' : ''))),
+            h('td', null, rightNodes.length
+              ? h('div', { className: 'rc-cell rc-add' }, rightNodes.map((n, i) => h('div', { key: i }, rcShort((n && n.text) || '', 300))))
+              : h('div', { className: 'rc-cell' }, h('span', { className: 'wb-hint' }, isDel ? '（删除）' : ''))),
+            h('td', null, kindTag, pos));
         }) : [],
       }) : null;
 
@@ -9129,14 +9117,29 @@ window.__ModuleLoader__.load({
         rows: unpairedRows.map(({ change, index }) => {
           const left = Array.isArray(change.baseline) ? change.baseline : [];
           const right = Array.isArray(change.modified) ? change.modified : [];
+          const miss = refusedByIndex.get(index);
           return h('tr', { key: 'u' + index, style: { opacity: 0.75 } },
             h('td', null, h('input', { type: 'checkbox', disabled: true, checked: false, title: '未配对内容不能写回' })),
             h('td', null, h('div', { className: 'rc-cell rc-del' }, left.length ? left.slice(0, 6).map((x, i) => h('div', { key: i }, rcShort((x && x.text) || '（空）', 300))) : '（无）')),
             h('td', null, h('div', { className: 'rc-cell rc-add' }, right.length ? right.slice(0, 6).map((x, i) => h('div', { key: i }, rcShort((x && x.text) || '（空）', 300))) : '（无）')),
-            h('td', null, h('span', { className: 'wb-tag ' + (rcUnsupported(change) ? 'red' : 'warn') }, rcUnsupported(change) ? '含变量 / 图片' : '未配对'),
-              h('div', { className: 'wb-hint', style: { marginTop: 2 } }, '重复、结构变化或不支持对象，需人工核对')));
+            h('td', null, h('span', { className: 'wb-tag ' + (miss && miss.added ? 'green' : rcUnsupported(change) ? 'red' : miss && miss.deleted ? 'grey' : 'warn') }, rcUnpairReason(change, miss)),
+              h('div', { className: 'wb-hint', style: { marginTop: 2 } }, rcUnpairNote(change, miss))));
         }),
       }) : null;
+
+      // 附件节点单独列出来：这些内容线上改不了字，但可以打开在线编辑或整份替换。
+      // 只说"改不了"会让用户卡住，必须同时告诉他去哪儿改。
+      const attachRows = result && locate && Array.isArray(locate.attachments) ? locate.attachments : [];
+      const attachPanel = attachRows.length ? h('div', { className: 'wb-sec', style: { marginTop: 14 } },
+        h('div', { className: 'wb-sec-h' }, h('h2', null, '这份报告里的上传附件'), h('span', { className: 'wb-tag grey' }, attachRows.length + ' 个')),
+        h('p', { className: 'wb-hint' }, '这些节点的正文是上传的 Word 文件，不在可编辑段落里。上面「未配对内容」里标了「上传的 Word 附件」的，都要到对应文件里改：在天源网页打开该节点在线编辑（或整份替换文件），改完重新生成报告再比对一次。改完不会自动同步到节点正文，所以这里不提供写回。'),
+        h(Table, {
+          cols: ['附件文件', '节点 id', '附件 id'],
+          rows: attachRows.map((a, i) => h('tr', { key: 'a' + i },
+            h('td', null, h('div', { className: 'rc-cell' }, a.fileName || a.itemName || '（未命名）')),
+            h('td', null, h('div', { className: 'rc-pos' }, a.itemId)),
+            h('td', null, h('div', { className: 'rc-pos' }, a.attachId || '—')))),
+        })) : null;
 
       const writePanel = result && locate ? h('div', { className: 'wb-sec', style: { marginTop: 14 } },
         h('div', { className: 'wb-sec-h' }, h('h2', null, '写回线上'),
@@ -9316,6 +9319,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'wb-sec-h' }, h('h2', null, '未配对内容'), h('span', { className: 'wb-tag warn' }, '不能写回')),
               h('p', { className: 'wb-hint' }, '这些段落无法可靠配对（重复、结构变化或含变量/图片/附件）。它们不能写回，但必须让你看见——否则你会以为差异只有上面那几行。'),
               unpairedTable) : null,
+            attachPanel,
             warnings.length ? h('div', { className: 'wb-alert warn', style: { display: 'block' } },
               h('div', { className: 't' }, '比对范围限制'),
               h('div', { className: 'b' }, warnings.map((w, i) => h('div', { key: i }, '· ' + (RC_WARNING_LABELS[w] || rcShort(w, 200))))),
@@ -9554,7 +9558,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { border: '1px solid var(--dsw-alias-border-l1,#ddd)', borderRadius: 8, padding: 8 } },
           h('div', { className: 'wb-label' }, 'CLI 绑定（tycpv）'),
           h('div', null, cliLine),
-          h('div', { className: 'wb-hint', style: { marginTop: 4 } }, 'MCP 与 CLI 凭据相互独立；项目同步与导出走 CLI/MCP，网页表单类操作走 ego 独立窗口（无需任何浏览器插件）。'))));
+          h('div', { className: 'wb-hint', style: { marginTop: 4 } }, 'MCP 与 CLI 凭据相互独立；项目同步与导出走 CLI/MCP，网页表单类操作走 opencli 驱动你自己的 Chrome。'))));
     }
     // ---------- 助手（第四个模块）：工作台内的浮动对话窗 ----------
     // 为什么不用右侧栏的 sidechat：工作台是 main slot 里的一个 keyed 主面板，

@@ -13,7 +13,9 @@ import { openShell } from './opener.js';
 import * as ty from './tianyuan.js';
 import * as tyWeb from './tianyuan-web.js';
 import * as tySession from './tianyuan-session.js';
-import { buildReportScript, buildProbeScript, buildCompaniesScript, buildLoginScript, REPORT_SENTINEL } from './report-ego.js';
+// 报告导出只走 opencli（用户真实浏览器）一条通道。
+// 报告导出与同步填表都只走 opencli（用户真实浏览器）一条通道；
+// ego 独立窗口引擎（原 report-ego.js）已于 2026-11-23 完整移除。
 import * as rb from './report-browser.js';
 import { createCliAuth } from './cli-auth.js';
 import { runManualWorkflow } from './export-workflow.js';
@@ -29,7 +31,7 @@ import { listBaselines, compareUpload, compareAgainstLive, readManifestForWriteb
 import { applyWriteback, readContents } from './report-writeback.js';
 import { collectContentItemIds, FULL_CONTENT_CHUNK, MAX_FULL_ITEMS } from './report-online-full.js';
 import { buildOnlineSnapshot } from './report-online-snapshot.js';
-import { buildData as tySyncData, runSync as tySyncRun, resolveEgoBin, spawnEgoScript, openSyncSpace, runSyncBridge, bridgeReady } from './tysync.js';
+import { buildData as tySyncData, runSync as tySyncRun, resolveOpencliRoot, openSyncSpace } from './tysync.js';
 
 const name = 'workbench';
 const inject = ['connection'];
@@ -1734,7 +1736,7 @@ export function apply(ctx) {
   const G = globalThis;
   // 版本号写进 ~/.dsh/workbench-host-applied.json 的 rev 字段，排障时用来确认
   // 运行中的进程到底加载了哪一版宿主代码。改了宿主逻辑就往上加一。
-  const REV = 'rev52';
+  const REV = 'rev53';
   // 路由归属表：path -> 「注册它的那个 apply() 实例」的 token。
   //
   // 为什么不用「REV 布尔标记挡住第二次 apply」：宿主半侧有两个 entry（主包 + 仅宿主的
@@ -2077,7 +2079,7 @@ export function apply(ctx) {
     },
     {
       // 同步到线上（真填表）：把工作台项目按四组页签填进天源网页表单，新建 / 更新两条路径。
-      // 走 ego 浏览器独立 task space「workbench-sync」，复用它的天源登录态；
+      // 走 opencli 驱动用户自己的 Chrome，复用其天源登录态；
       // 保存接口永远 HTTP 200，引擎靠保存后回读判断成败，失败原因进 mismatches。
       path: PREFIX + '/ty/sync', methods: ['POST'], fetch: async (req) => {
         const g = globalThis;
@@ -2090,27 +2092,9 @@ export function apply(ctx) {
           const fieldCount = data.tabs.reduce((n, t) => n + t.fields.length, 0);
           if (!fieldCount) return json({ ok: false, code: 'EMPTY', msg: '这个项目还没有可同步的字段' }, 400);
           g.__dshWorkbenchTySyncBusy = true;
-          // 默认 ego（ego lite 浏览器）：在 workbench-sync 窗口里按四组页签逐项填写。
-          // ego 未登录 / 起不来时才退回 bridge（驱动用户真实 Edge，复用其登录态）。
-          const want = String(b.engine || 'ego');   // ego（默认）| bridge | auto
-          // claimSpace：同步窗口被用户点过之后 ego 判成「人工窗口」，只有用户点了「接管」才允许 claim
-          const claim = !!b.claimSpace;
-          const egoDead = (x) => !!x && (x.code === 'NOT_LOGGED_IN' || x.code === 'NO_EGO' || x.code === 'SPAWN_FAIL' || x.code === 'SPAWN_ERROR');
-          let r = null;
-          let usedEngine = '';
-          if (want !== 'bridge') {
-            r = await tySyncRun(data, { timeoutMs: 300000, claim });
-            usedEngine = 'ego';
-            if (want !== 'ego' && egoDead(r)) {
-              const fb = await runSyncBridge(data, { cdpTimeoutMs: 45000 });
-              r = { ...fb, fallbackFrom: 'ego', egoMsg: r.msg || r.code };
-              usedEngine = 'bridge';
-            }
-          } else {
-            r = await runSyncBridge(data, { cdpTimeoutMs: 45000 });
-            usedEngine = 'bridge';
-          }
-          return json({ ...r, engine: usedEngine, mode: data.mode, fieldCount, headerWarnings: data.warnings });
+          // 单一通道：opencli 驱动用户自己的 Chrome（登录态天然可用）。
+          const r = await tySyncRun(data, { timeoutMs: 300000 });
+          return json({ ...r, engine: 'opencli', mode: data.mode, fieldCount, headerWarnings: data.warnings });
         } catch (e) {
           return json({ ok: false, code: 'SYNC_FAIL', msg: String(e.message || e) }, 500);
         } finally {
@@ -2119,32 +2103,22 @@ export function apply(ctx) {
       },
     },
     {
-      // 排障用：确认宿主解析到的 ego-browser 路径与固定 task space 名
-      path: PREFIX + '/ty/sync/probe', methods: ['GET', 'HEAD'], fetch: () => json({ ego: resolveEgoBin(), space: 'workbench-sync' }),
+      // 排障用：确认宿主解析到的 opencli 包根
+      path: PREFIX + '/ty/sync/probe', methods: ['GET', 'HEAD'], fetch: () => json({ opencliRoot: resolveOpencliRoot(), engine: 'opencli' }),
     },
     {
-      // 同步通道体检：ego 优先（workbench-sync 窗口的天源登录态），ego 不可用再看 bridge。
-      // 不传 ?bridge=1 时会打开/复用 ego 同步窗口（一次约 2–5 秒，浏览器已在就快）。
-      path: PREFIX + '/ty/sync/login', methods: ['GET', 'HEAD', 'POST'], fetch: async (req) => {
+      // 同步通道体检：打开天源首页看登录态。只读，不写任何数据。
+      path: PREFIX + '/ty/sync/login', methods: ['GET', 'HEAD', 'POST'], fetch: async () => {
         try {
-          const u = new URL(req.url, 'http://127.0.0.1');
-          let eg = null;
-          if (u.searchParams.get('bridge') !== '1') {
-            eg = await openSyncSpace().catch((e) => ({ ok: false, msg: String(e.message || e) }));
-          }
-          if (eg && eg.loggedIn) {
-            return json({ ok: true, engine: 'ego', ready: true, loggedIn: true, url: eg.url || '', ego: { loggedIn: true, url: eg.url || '' } });
-          }
-          const br = await bridgeReady();
-          const egoMsg = eg ? (eg.msg || 'ego 同步窗口未登录天源') : '';
+          const r = await openSyncSpace().catch((e) => ({ ok: false, msg: String(e.message || e) }));
           return json({
             ok: true,
-            engine: 'bridge',
-            ready: !!br.ok,
-            loggedIn: !!br.ok,
-            tabs: br.tabs || 0,
-            msg: egoMsg ? (egoMsg + (br.ok ? '；已回退到 Edge（bridge）通道' : '')) : br.msg,
-            ego: eg ? { loggedIn: !!eg.loggedIn, url: eg.url || '', msg: eg.msg || '' } : null,
+            engine: 'opencli',
+            ready: !!r.ok,
+            loggedIn: !!r.loggedIn,
+            url: r.url || '',
+            code: r.code,
+            msg: r.msg || '',
           });
         } catch (e) { return json({ ok: false, msg: String(e.message || e) }, 500); }
       },
@@ -2176,33 +2150,15 @@ export function apply(ctx) {
         },
       },
       {
-        // ego 驱动：在 ego 的 workbench-sync 窗口打开天源首页，供用户在该窗口扫码登录。
-        // 注意：ego 的 task space 之间 cookie 隔离，playwright 那套登录态在这里无效。
-        path: PREFIX + '/ty/ego/login', methods: ['POST'], fetch: async () => {
-          try {
-            if (!resolveEgoBin()) return json({ ok: false, code: 'NO_EGO', msg: '未安装 ego 浏览器' }, 503);
-            const r = await spawnEgoScript(buildLoginScript(), 120000);
-            return json(r || { ok: false, msg: '登录窗口未返回结果' });
-          } catch (e) { return json({ ok: false, msg: String(e.message || e) }, 500); }
-        },
-      },
-      {
-        // ego 驱动：列出项目下公司 + 各家可导出的文档类型（reportConfigList 权威来源）
-        path: PREFIX + '/ty/ego/companies', methods: ['GET', 'HEAD'], fetch: async (req) => {
+        // 列出项目下公司 + 各家可导出的文档类型（reportConfigList 权威来源）
+        path: PREFIX + '/ty/browser/companies', methods: ['GET', 'HEAD'], fetch: async (req) => {
           try {
             const u = new URL(req.url, 'http://127.0.0.1');
             const projectId = u.searchParams.get('projectId');
-            const engine = u.searchParams.get('engine') === 'ego' ? 'ego' : 'browser';
             if (!/^\d+$/.test(String(projectId || ''))) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
-            if (engine === 'browser') {
-              if (!rb.resolveOpencliBin()) return json({ ok: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）' }, 503);
-              const companies = await rb.listCompanies(projectId);
-              return json({ ok: true, companies, engine });
-            }
-            if (!resolveEgoBin()) return json({ ok: false, code: 'NO_EGO', error: '未安装 ego 浏览器' }, 503);
-            const r = await spawnEgoScript(buildCompaniesScript(projectId), 180000);
-            if (r && r.ok) return json({ ok: true, companies: r.companies || [], engine });
-            return json({ ok: false, code: r && r.code, error: (r && (r.msg || r.code)) || '读取公司列表失败' }, r && r.code === 'NOT_LOGGED_IN' ? 401 : 500);
+            if (!rb.resolveOpencliBin()) return json({ ok: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）' }, 503);
+            const companies = await rb.listCompanies(projectId);
+            return json({ ok: true, companies, engine: 'browser' });
           } catch (e) {
             const code = e && e.message === 'NOT_LOGGED_IN' ? 'NOT_LOGGED_IN'
               : e && e.message === 'BRIDGE_DISCONNECTED' ? 'BRIDGE_DISCONNECTED'
@@ -2214,7 +2170,7 @@ export function apply(ctx) {
       },
       {
         // 浏览器通道自检 / 自愈：扩展断连时重启 opencli daemon 并等扩展重连
-        path: PREFIX + '/ty/ego/bridge', methods: ['GET', 'POST'], fetch: async (req) => {
+        path: PREFIX + '/ty/browser/bridge', methods: ['GET', 'POST'], fetch: async (req) => {
           try {
             if (!rb.resolveOpencliBin()) return json({ ok: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）' }, 503);
             if (req.method === 'POST') {
@@ -2230,36 +2186,28 @@ export function apply(ctx) {
         },
       },
       {
-        // ego 驱动：探测 ego 窗口的天源登录态 + 报告列表（不写文件）
-        path: PREFIX + '/ty/ego/probe', methods: ['GET', 'HEAD'], fetch: async (req) => {
+        // 探测天源登录态 + 报告列表（不写文件）
+        path: PREFIX + '/ty/browser/probe', methods: ['GET', 'HEAD'], fetch: async (req) => {
           try {
             const u = new URL(req.url, 'http://127.0.0.1');
             const projectId = u.searchParams.get('projectId');
-            const engine = u.searchParams.get('engine') === 'ego' ? 'ego' : 'browser';
             if (!/^\d+$/.test(String(projectId || ''))) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
-            if (engine === 'browser') {
-              if (!rb.resolveOpencliBin()) return json({ ok: true, logged: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）', engine });
-              try {
-                const reports = await rb.listReports(projectId);
-                return json({ ok: true, logged: true, reports, engine });
-              } catch (e) {
-                const code = e && e.message === 'NOT_LOGGED_IN' ? 'NOT_LOGGED_IN'
-                  : e && e.message === 'BRIDGE_DISCONNECTED' ? 'BRIDGE_DISCONNECTED'
-                  : 'PROBE_FAILED';
-                return json({ ok: true, logged: false, code, error: (e && (e.detail || e.message)) || '未登录', engine });
-              }
+            if (!rb.resolveOpencliBin()) return json({ ok: true, logged: false, code: 'NO_OPENCLI', error: '未找到 opencli（你的浏览器通道）', engine: 'browser' });
+            try {
+              const reports = await rb.listReports(projectId);
+              return json({ ok: true, logged: true, reports, engine: 'browser' });
+            } catch (e) {
+              const code = e && e.message === 'NOT_LOGGED_IN' ? 'NOT_LOGGED_IN'
+                : e && e.message === 'BRIDGE_DISCONNECTED' ? 'BRIDGE_DISCONNECTED'
+                : 'PROBE_FAILED';
+              return json({ ok: true, logged: false, code, error: (e && (e.detail || e.message)) || '未登录', engine: 'browser' });
             }
-            if (!resolveEgoBin()) return json({ ok: true, logged: false, code: 'NO_EGO', error: '未安装 ego 浏览器', engine });
-            const r = await spawnEgoScript(buildProbeScript(projectId), 150000);
-            if (r && r.ok && r.logged) return json({ ok: true, logged: true, reports: r.reports || [], engine });
-            return json({ ok: true, logged: false, code: r && r.code, error: (r && (r.msg || r.code)) || '未登录', engine });
           } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
         },
       },
       {
-        // 引擎选择：ego（独立 task space 浏览器，需单独登录）
-        //          browser（用户真实浏览器，走 opencli Browser Bridge，共享登录态，默认）
-        path: PREFIX + '/ty/ego/export', methods: ['POST'], fetch: async (req) => {
+        // 报告/说明原生导出：只走 opencli（用户真实浏览器），共享其天源登录态。
+        path: PREFIX + '/ty/browser/export', methods: ['POST'], fetch: async (req) => {
           try {
             const b = await req.json().catch(() => ({}));
             const jobId = /^[A-Za-z0-9_-]{6,64}$/.test(String(b.jobId || '')) ? String(b.jobId) : '';
@@ -2269,7 +2217,6 @@ export function apply(ctx) {
             const items = Array.isArray(b.items) ? b.items : [];
             if (!items.length) return json({ ok: false, error: '请至少选择一份文档' }, 400);
             const applyFormat = b.applyFormat !== false;   // 默认按「报告格式」页处理表格
-            const engine = b.engine === 'ego' ? 'ego' : 'browser';   // 默认用户真实浏览器
             for (const it of items) {
               if (!it || !/^\d+$/.test(String(it.companyId || '')) || ![1, 2, 3].includes(Number(it.type))) return json({ ok: false, error: 'items 每项需数字 companyId 与 type(1/2/3)' }, 400);
               if (!['current', 'refresh'].includes(it.mode)) return json({ ok: false, error: 'mode 必须为 current 或 refresh' }, 400);
@@ -2288,34 +2235,28 @@ export function apply(ctx) {
               await mkdir(outDir, { recursive: true });
             }
             const setProg = patch => { if (exportProgress.size > 50) { let oldest = null; for (const [k, v] of exportProgress) if (!oldest || v.at < oldest.at) oldest = { k, at: v.at }; if (oldest) exportProgress.delete(oldest.k); } exportProgress.set(jobId, { at: Date.now(), ...patch }); };
-            setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, message: engine === 'ego' ? '提升 ego 窗口…' : '连接你的浏览器…' });
+            setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, message: '连接你的浏览器…' });
 
             (async () => {
               try {
-                setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, engine, message: engine === 'ego' ? '正在驱动 ego 浏览器执行导出…' : '正在驱动你的浏览器执行导出…' });
+                setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, engine: 'browser', message: '正在驱动你的浏览器执行导出…' });
                 const normItems = items.map(i => ({ companyId: String(i.companyId), companyName: i.companyName || '', type: Number(i.type), mode: i.mode }));
-                let r;
-                if (engine === 'browser') {
-                  if (!rb.resolveOpencliBin()) {
-                    setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: ['未找到 opencli（你的浏览器通道）。请联系管理员安装 opencli，或改用 ego 引擎。'], outDir, message: '缺少 opencli' });
-                    return;
-                  }
-                  r = await rb.exportReports({
-                    projectId, items: normItems,
-                    onLog: (m) => { const cur = exportProgress.get(jobId); if (cur) setProg({ ...cur, at: Date.now(), logs: [...(cur.logs || []), m].slice(-200) }); },
-                  });
-                } else {
-                  r = await spawnEgoScript(buildReportScript({ projectId, items: normItems }), Math.max(900000, items.length * 660000));
+                if (!rb.resolveOpencliBin()) {
+                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: ['未找到 opencli（你的浏览器通道）。请安装 opencli 后重试。'], outDir, message: '缺少 opencli' });
+                  return;
                 }
+                const r = await rb.exportReports({
+                  projectId, items: normItems,
+                  onLog: (m) => { const cur = exportProgress.get(jobId); if (cur) setProg({ ...cur, at: Date.now(), logs: [...(cur.logs || []), m].slice(-200) }); },
+                });
                 if (!r || !r.ok) {
                   const notLogged = r && (r.code === 'NOT_LOGGED_IN' || r.code === 'BRIDGE_DISCONNECTED');
-                  const engineName = engine === 'ego' ? 'ego 窗口' : '你的浏览器';
                   const bridgeDown = r && r.code === 'BRIDGE_DISCONNECTED';
                   const msg = bridgeDown
                     ? String((r && r.detail) || (r && r.msg) || '连不上浏览器')
-                    : notLogged ? (engineName + '未登录天源：请在该窗口登录一次后重试')
+                    : notLogged ? '你的浏览器未登录天源：请在浏览器里登录一次后重试'
                     : String((r && (r.msg || r.code || r.detail)) || '导出失败');
-                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: [msg], outDir, engine, message: bridgeDown ? '连不上浏览器' : (notLogged ? '需要登录天源' : '导出失败'), logs: (r && r.logs) || [] });
+                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: [msg], outDir, engine: 'browser', message: bridgeDown ? '连不上浏览器' : (notLogged ? '需要登录天源' : '导出失败'), logs: (r && r.logs) || [] });
                   return;
                 }
                 const files = []; const errors = Array.isArray(r.errors) ? r.errors.slice() : [];
@@ -2430,7 +2371,7 @@ export function apply(ctx) {
                 }
                 setProg({
                   status: okAll ? 'done' : (files.length ? 'partial' : 'failed'), stage: okAll ? 'done' : (files.length ? 'partial' : 'failed'),
-                  total: items.length, done: items.length, files, errors, outDir, applyFormat, engine,
+                  total: items.length, done: items.length, files, errors, outDir, applyFormat, engine: 'browser',
                   message: okAll ? ('完成：' + files.length + ' 份原生文档' + suffix) : (files.length ? ('部分完成：' + files.length + ' 份成功，' + errors.length + ' 项失败') : '导出失败'),
                   logs: r.logs || [],
                 });

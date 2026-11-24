@@ -1,13 +1,11 @@
 // 天源报告原生导出 · 真实浏览器（opencli / Browser Bridge）驱动引擎
 //
-// 与 report-ego.js 的区别：
-//   - ego 走的是独立的 task space 浏览器，登录态与用户真实浏览器隔离，用户每次都要重新扫码；
-//   - 本模块走 opencli 的 Browser Bridge，直接跑在用户日常使用的 Chrome profile 里，
-//     天然共享登录态，不需要额外登录，也不需要安装/启动第二个浏览器。
+// 走 opencli 的 Browser Bridge，直接跑在用户日常使用的 Chrome profile 里，
+// 天然共享登录态，不需要额外登录，也不需要安装/启动第二个浏览器。
 //
 // 复用：数据工具（dsh-data-tools）里阿里拍卖模块验证过的同一条 opencli 通道。
 //
-// 设计约束（沿用 report-ego.js 已验证的判定纪律）：
+// 设计约束（真实失败换来的判定纪律）：
 //  1. 一律按 companyId + reportType + version 三重比对，绝不用公司名模糊匹配；
 //  2. refresh 模式先记录基线最高版本，只认「版本更高 且 jobState=2 且 attachId 非空」；
 //  3. 每份下载立刻校验 ZIP 头（PK），不合格即判该项失败；

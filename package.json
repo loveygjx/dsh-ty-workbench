@@ -38,7 +38,6 @@
     "export-workflow.js",
     "tianyuan-web.js",
     "tianyuan-session.js",
-    "report-ego.js",
     "report-browser.js",
     "opener.js",
     "store.js",

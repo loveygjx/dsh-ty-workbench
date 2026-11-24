@@ -1,11 +1,17 @@
-// 天源「同步到线上」引擎：把工作台项目数据通过 ego 浏览器填进天源网页表单。
+// 天源「同步到线上」引擎：把工作台项目数据填进天源网页表单。
 //
 // 为什么走浏览器而不是接口：天源 OpenAPI 只开放读项目 + 写参与人员/公司负责人，
 // 新建项目与基本信息/客户/被评估单位/合同四组写入只在网页表单里。
 //
-// 为什么由宿主 spawn ego-browser，而不是在插件侧栏里注入脚本：
-// DSH 的 sidebarRight 只有 openTab，没有脚本注入能力；ego-browser 的 nodejs 模式
-// 提供 cdp() 和 ego.helpers，能在独立 task space 里驱动真实 Chromium（含登录态）。
+// 驱动方式（2026-11-23 起统一）：只走 opencli Browser Bridge，直接操作用户自己
+// 已登录天源的 Chrome。此前还有 ego 独立窗口与 agent-browser-cli(Edge) 两条通道，
+// 都要单独登录或装第二套插件，已全部移除。
+//
+// 实现要点：import opencli 自带的 BrowserBridge，拿 IPage 后包一层 cdp(method, params)
+// 适配器喂给下面的 SYNC_SCRIPT —— 字段逻辑一行不用改。
+// 为什么不用 `opencli browser <s> eval` 子命令：那条路每次都要起一个 node 进程
+// （实测单次 ~280ms），同步几十个字段会慢到不可用；直连同一进程内单次往返 ~6ms。
+// Page.navigate / Page.reload 被 opencli 的 CDP 白名单拦掉，改用 page.goto()。
 //
 // 关键经验（都是从真实失败里换来的）：
 // 1. 保存接口 /api/projects/update **永远返回 HTTP 200**，成败只看响应体 code；
@@ -17,6 +23,7 @@
 // 5. 天源存在同名不同人（如两个同名同事账号）：下拉文本完全一样，必须按「取最后一个」
 //    处理（离职账号排在前面），否则保存会整单回滚。
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, statSync, readdirSync } from 'node:fs';
@@ -25,45 +32,34 @@ import { globSync } from 'node:fs';
 const SPACE = 'workbench-sync';
 const SENTINEL = '@@DSH_SYNC@@';
 
-/**
- * ego-browser 可执行文件：环境变量 > ego 安装目录结构 > PATH。
- * ego 各版本布局不同（ego lite 的 active_version_dir 指向 .app 内的 Framework），
- * 所以按候选目录逐个探测常见可执行名，而不是写死单一路径。
- */
-export function resolveEgoBin() {
-  const names = ['ego-browser', 'ego-browser.exe', 'ego', 'ego.exe'];
-  const dirs = [];
-  if (process.env.DSH_EGO_BROWSER) return process.env.DSH_EGO_BROWSER;
-  const roots = [
-    join(homedir(), '.local', 'share', 'ego', 'active_version_dir'),
-    join(homedir(), '.local', 'share', 'ego'),
-  ];
-  for (const root of roots) {
-    // macOS .app 布局：Contents/MacOS/<exe>、Contents/Frameworks/.../Resources
-    dirs.push(root);
-    dirs.push(join(root, 'Contents', 'MacOS'));
-    dirs.push(join(root, 'Resources'));
-    dirs.push(join(root, 'Resources', 'ego-skills', 'ego-browser'));
-  }
-  // /Applications 下的 ego 应用（ego lite / ego）：主程序与 Helpers/ego-browser 都可执行
-  for (const appName of ['ego lite', 'ego', 'Ego', 'Ego Lite']) {
-    const base = '/Applications/' + appName + '.app/Contents';
-    dirs.push(join(base, 'MacOS'));
-    dirs.push(join(base, 'Frameworks'));
-  }
-  //ego Framework.framework 里的 Helpers/ego-browser 与 Resources/ego-skills/ego-browser
-  const fwRoots = globSync('/Applications/ego *.app/Contents/Frameworks/*.framework/Versions/*');
-  for (const fw of fwRoots) {
-    dirs.push(join(fw, 'Helpers'));
-    dirs.push(join(fw, 'Resources', 'ego-skills', 'ego-browser'));
-  }
-  for (const d of dirs) {
-    for (const n of names) {
-      const c = join(d, n);
-      try { if (existsSync(c) && statSync(c).isFile()) return c; } catch (e) {}
-    }
+/** opencli 安装根目录候选（npm 全局 / 本地 / homebrew）。 */
+const OPENCLI_ROOTS = [
+  join(homedir(), '.npm-global', 'lib', 'node_modules', '@jackwener', 'opencli'),
+  '/usr/local/lib/node_modules/@jackwener/opencli',
+  '/opt/homebrew/lib/node_modules/@jackwener/opencli',
+];
+
+/** 找 opencli 的 npm 包根目录；找不到返回 null。 */
+export function resolveOpencliRoot() {
+  if (process.env.DSH_OPENCLI_ROOT) return process.env.DSH_OPENCLI_ROOT;
+  for (const p of OPENCLI_ROOTS) {
+    try { if (existsSync(join(p, 'package.json'))) return p; } catch (e) { /* 下一个 */ }
   }
   return null;
+}
+
+/**
+ * 加载 opencli 的 BrowserBridge（动态 import，避免宿主启动时硬依赖 opencli）。
+ * 返回 { BrowserBridge } 或抛错说明缺失原因。
+ */
+async function loadBrowserBridge() {
+  const root = resolveOpencliRoot();
+  if (!root) throw new Error('没找到 opencli（可用环境变量 DSH_OPENCLI_ROOT 指定包根目录）');
+  const entry = join(root, 'dist', 'src', 'browser', 'bridge.js');
+  if (!existsSync(entry)) throw new Error('opencli 安装不完整：缺少 ' + entry);
+  const mod = await import(pathToFileURL(entry).href);
+  if (!mod || typeof mod.BrowserBridge !== 'function') throw new Error('opencli 版本不兼容：没有导出 BrowserBridge');
+  return mod;
 }
 
 /** 只取有值的字段，空值一律不写（避免把线上已有内容清空）。 */
@@ -181,15 +177,14 @@ export function buildData(rec) {
 /**
  * 引擎脚本（字段逻辑的唯一真相）。
  * 只依赖注入的 cdp(method, params)：
- *   - ego 驱动：浏览器里传全局 cdp（ego-browser nodejs 提供）
- *   - bridge 驱动：宿主里传「agent-browser-cli exec {"cmd":"cdp",...}」的封装
+ *   - 宿主侧：opencli BrowserBridge → IPage → 包一层 cdp(method, params) 适配器
  * 所以下面的字段逻辑一行都不用改就能换驱动。
  */
 async function SYNC_SCRIPT(DATA, cdp, setup, pace) {
   const out = { ok: false, mode: DATA.mode, applied: [], warnings: (DATA.warnings || []).slice(), mismatches: [], notes: [] };
   const skipped = new Set();   // 线上只读、本次没写的字段（回读校验也跳过）
-  // pace：时序倍率。ego 走进程内 CDP（快，1×）；bridge 每次调用要起一个 CLI 进程（慢，2×），
-  // 页面动画/teleport 下拉需要更长的等待，否则会读到上一个还没关掉的下拉。
+  // pace：时序倍率。opencli 直连是同进程 CDP 往返（实测单次 ~6ms），用 1×；
+  // 若将来换回「每次起 CLI 进程」的驱动，传 2× 并保留这里的等号逻辑。
   const sleep = (ms) => new Promise((r) => setTimeout(r, Math.round((ms || 0) * (typeof pace === 'number' && pace > 0 ? pace : 1))));
   const emit = () => console.log('@@DSH_SYNC@@' + JSON.stringify(out));
   const jstr = (o) => JSON.stringify(o);
@@ -569,7 +564,7 @@ async function SYNC_SCRIPT(DATA, cdp, setup, pace) {
   }
 
   try {
-    if (typeof setup === 'function') await setup();   // ego 驱动：先切到专用 task space；bridge 不传
+    if (typeof setup === 'function') await setup();   // 预留钩子：opencli 驱动不传
     const base = 'https://ty.zhrdc.net';
     let url = await goto(DATA.mode === 'update' ? (base + '/project/' + DATA.tyId + '/edit') : (base + '/project/my'));
     if (String(url).indexOf('auth.zhrdc.net') >= 0) {
@@ -712,222 +707,123 @@ async function SYNC_SCRIPT(DATA, cdp, setup, pace) {
   } catch (e) {
     out.ok = false;
     const m = String((e && e.message) || e);
-    if (m.indexOf('SPACE_OWNED:') === 0) {
-      out.code = 'SPACE_OWNED';
-      out.spaceId = m.split(':')[1];
-      out.msg = '同步窗口「workbench-sync」现在归你操作（ego 判成人工窗口），插件不能直接接管。点「接管同步窗口并重试」授权后继续。';
-    } else {
-      out.msg = m;
-    }
+    out.msg = m;
     emit();
   }
 }
 
-export function buildScript(data, opts) {
-  const claim = !!(opts && opts.claim);
-  const S = JSON.stringify(SPACE);
-  // 第三参是 ego 专属的「切到专用 task space」；cdp 用 ego-browser nodejs 里的全局。
-  // 用户在这个窗口里点过（登录、看表单）之后，ego 会把它判成「用户窗口」，
-  // useOrCreateTaskSpace 会拒绝接管 —— 这时只有用户点了「接管」才 claimTaskSpace。
-  const setup = 'async function () {'
-    + ' const list = await ego.helpers.listTaskSpaces();'
-    + ' const t = (list || []).find(function (s) { return s && s.name === ' + S + '; });'
-    + ' if (!t || t.ownership === "agent") return ego.helpers.useOrCreateTaskSpace(' + S + ');'
-    + ' if (' + (claim ? 'true' : 'false') + ') return ego.helpers.claimTaskSpace(t.id);'
-    + ' throw new Error("SPACE_OWNED:" + t.id);'
-    + '}';
-  return '(' + SYNC_SCRIPT.toString() + ')(' + JSON.stringify(data) + ', cdp, ' + setup + ', 1)';
-}
-
-/** 跑一段 ego 脚本并取回哨兵结果。stdout/stderr 都扫（ego 的 console.log 走 stderr）。 */
-export function spawnEgoScript(script, timeoutMs) {
-  const bin = resolveEgoBin();
-  if (!bin) return Promise.resolve({ ok: false, code: 'NO_EGO', msg: '没找到 ego-browser（可用环境变量 DSH_EGO_BROWSER 指定完整路径）' });
-  const ms = timeoutMs || 300000;
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (r) => { if (!done) { done = true; resolve(r); } };
-    let child;
-    try {
-      child = spawn(bin, ['nodejs'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    } catch (e) {
-      return finish({ ok: false, code: 'SPAWN_FAIL', msg: String(e.message || e) });
-    }
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch (e) {}
-      finish({ ok: false, code: 'TIMEOUT', msg: '同步超时（' + Math.round(ms / 1000) + 's）', stderr: stderr.slice(-800) });
-    }, ms);
-    child.stdout.on('data', (b) => { stdout += b.toString(); });
-    child.stderr.on('data', (b) => { stderr += b.toString(); });
-    child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, code: 'SPAWN_ERROR', msg: String(e.message || e) }); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      // 注意：ego-browser nodejs 模式下 console.log 走的是 **stderr**（实测），两个流都要扫。
-      const markers = ['@@DSH_SYNC@@', '@@DSH_REPORT@@'];
-      const line = (stdout + '\n' + stderr).split(/\r?\n/).reverse().find((l) => markers.some((m) => l.indexOf(m) === 0));
-      if (!line) {
-        return finish({ ok: false, code: 'NO_RESULT', msg: '引擎没有返回结果（exit ' + code + '）', stdout: stdout.slice(-800), stderr: stderr.slice(-800) });
-      }
-      try {
-        const marker = markers.find((m) => line.indexOf(m) === 0);
-        return finish(JSON.parse(line.slice(marker.length)));
-      } catch (e) {
-        return finish({ ok: false, code: 'BAD_JSON', msg: '结果解析失败', raw: line.slice(0, 500) });
-      }
-    });
-    try {
-      child.stdin.write(script);
-      child.stdin.end();
-    } catch (e) { /* 交给 error/close 处理 */ }
-  });
-}
-
-/** 跑一次同步，返回引擎输出的结构化结果。 */
-export async function runSync(data, opts) {
-  const o = opts || {};
-  return await spawnEgoScript(buildScript(data, { claim: !!o.claim }), o.timeoutMs || 300000);
-}
-
-/**
- * 打开（或复用）同步窗口并检查天源登录态。
- * ego 的 task space 之间 cookie 是隔离的，所以第一次必须在「workbench-sync」这个窗口里登录一次；
- * 登录态随该 space 保留，直到 ego 浏览器重启。
- */
-export async function openSyncSpace() {
-  const script = '(async () => {'
-    + 'const emit = (o) => console.log(' + JSON.stringify(SENTINEL) + ' + JSON.stringify(o));'
-    + 'try {'
-    // 用户在这个窗口里点过之后 ego 会判成「人工窗口」，agent 不能再 useOrCreateTaskSpace；
-    // 这时不强行接管，只如实报告（真正接管发生在用户点「接管同步窗口并重试」时）。
-    + '  const list = await ego.helpers.listTaskSpaces();'
-    + '  const t = (list || []).find(function (s) { return s && s.name === "workbench-sync"; });'
-    + '  if (t && t.ownership === "user") {'
-    + '    emit({ ok: true, loggedIn: true, owned: "user", url: "", space: "workbench-sync",'
-    + '      msg: "同步窗口现在由你操作（ego 判成人工窗口），点同步时可授权接管" });'
-    + '    return; }'
-    + '  await ego.helpers.useOrCreateTaskSpace("workbench-sync");'
-    + '  await ego.helpers.gotoAndWait("https://ty.zhrdc.net/project/my", { timeout: 45000 });'
-    + '  const url = await ego.helpers.js("location.href");'
-    + '  const loggedIn = String(url).indexOf("/project/my") >= 0;'
-    + '  emit({ ok: true, loggedIn, url, space: "workbench-sync" });'
-    + '} catch (e) { emit({ ok: false, msg: String((e && e.message) || e) }); }'
-    + '})()';
-  return await spawnEgoScript(script, 90000);
-}
-
-// ======================= bridge 驱动（agent-browser-cli） =======================
-// 同一份 SYNC_SCRIPT，把 cdp() 换成「agent-browser-cli exec {"cmd":"cdp",...}」，
-// 走用户真实 Edge 的登录态，不用在 ego 的隔离窗口里再登录一次。
-
-const BRIDGE_CLI = process.env.DSH_BRIDGE_CLI || 'agent-browser-cli';
-const BRIDGE_TY_HOST = 'ty.zhrdc.net';
-// Windows 上直接 spawn .cmd 传 JSON 参数会被 cmd.exe 吃掉引号（实测报「文件名、目录名或卷标语法不正确」），
-// 所以优先用 node 直接跑 npm 包的 JS 入口，参数由 Node 负责转义。
-const BRIDGE_JS = process.env.DSH_BRIDGE_CLI_JS
-  || join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'npm', 'node_modules', '@sleepinsummer', 'agent-browser-cli', 'npm', 'bin', 'agent-browser-cli.js');
-
-function cliRun(args, timeoutMs) {
-  return new Promise((resolve) => {
-    const viaJs = BRIDGE_JS && existsSync(BRIDGE_JS);
-    const cmd = viaJs ? process.execPath : 'cmd.exe';
-    const full = viaJs ? [BRIDGE_JS, ...args] : ['/c', BRIDGE_CLI, ...args];
-    let child;
-    try {
-      child = spawn(cmd, full, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch (e) { return resolve({ ok: false, code: 'SPAWN_FAIL', msg: String(e.message || e) }); }
-    let out = '';
-    let err = '';
-    const t = setTimeout(() => {
-      try { child.kill(); } catch (e) {}
-      resolve({ ok: false, code: 'TIMEOUT', msg: 'agent-browser-cli 超时（' + args[0] + '）', stderr: err.slice(-300) });
-    }, timeoutMs || 60000);
-    child.stdout.on('data', (b) => { out += b.toString(); });
-    child.stderr.on('data', (b) => { err += b.toString(); });
-    child.on('error', (e) => { clearTimeout(t); resolve({ ok: false, code: 'SPAWN_ERROR', msg: String(e.message || e) }); });
-    child.on('close', (code) => {
-      clearTimeout(t);
-      let j = null;
-      const s = String(out).trim();
-      if (s) { try { j = JSON.parse(s); } catch (e) { j = null; } }
-      resolve({ ok: !!j && j.ok !== false, exitCode: code, json: j, stdout: out, stderr: err });
-    });
-  });
-}
-
-export async function bridgeTabs(opts) {
-  const o = opts || {};
-  // daemon 是按需拉起的：刚被杀掉/空闲退出后，tabs 会先卡在「等扩展连接」上（实测能挂 2 分钟）。
-  // 所以：先短超时试一次 → 不行就 restart 把 daemon 拉起来 → 再按扩展 ~24s 的保活闹钟重试。
-  const deadline = Date.now() + (o.waitMs || 0);
-  let last = { ok: false, tabs: [], detail: {} };
-  let kicked = false;
-  for (;;) {
-    const r = await cliRun(['tabs'], o.attemptMs || 8000);
-    const tabs = (r.json && r.json.result && r.json.result.metadata && r.json.result.metadata.tabs) || [];
-    last = { ok: r.ok, tabs, detail: r.json || { error: String(r.stderr || r.stdout).slice(0, 200) } };
-    if (r.ok && tabs.length) return last;
-    if (!kicked) { kicked = true; await cliRun(['restart'], 25000); continue; }
-    if (Date.now() >= deadline) return last;
-    await new Promise((res) => setTimeout(res, 3000));
-  }
-}
-
-export async function bridgeReady() {
-  const t = await bridgeTabs();
-  if (!t.ok) return { ok: false, tabs: 0, msg: 'bridge 未连接：确认 Edge 开着、Agent Browser CLI Bridge 插件启用、daemon 已起（agent-browser-cli restart）' };
-  if (!t.tabs.length) return { ok: false, tabs: 0, msg: '插件连上了，但 Edge 里没有普通网页标签：先打开一个网页（扩展只上报普通页面）' };
-  return { ok: true, tabs: t.tabs.length, msg: 'ok' };
-}
-
-async function bridgePickTab() {
-  const t = await bridgeTabs({ waitMs: 45000 });   // 冷启动：restart + 等扩展保活闹钟重连（实测 ~33s）
-  if (!t.ok) return { ok: false, code: 'BRIDGE_DOWN', msg: 'bridge 未连接（插件或 daemon 不在）' };
-  const ty = t.tabs.find((x) => String(x.url || '').indexOf(BRIDGE_TY_HOST) >= 0);
-  if (ty) return { ok: true, tabId: Number(ty.tab_id || ty.id), reused: true };
-  const http = t.tabs.find((x) => /^https?:/i.test(String(x.url || '')));
-  if (http) return { ok: true, tabId: Number(http.tab_id || http.id), reused: true };
-  return { ok: false, code: 'BRIDGE_NO_TAB', msg: 'Edge 里没有普通网页标签：先打开一个网页（扩展只上报 http/https 页面）' };
-}
-
-/** 用 bridge 跑一次同步：字段逻辑与 ego 完全同一份 SYNC_SCRIPT。 */
-export async function runSyncBridge(data, opts) {
-  const o = opts || {};
-  const pick = await bridgePickTab();
-  if (!pick.ok) return { ok: false, code: pick.code, msg: pick.msg, engine: 'bridge' };
-  const tabId = pick.tabId;
+/** 把 IPage 包成 SYNC_SCRIPT 期望的 cdp(method, params) 形状。 */
+function makeCdp(page) {
   let calls = 0;
   const cdp = async (method, params) => {
     calls += 1;
-    const payload = JSON.stringify({ cmd: 'cdp', tabId, method, params: params || {} });
-    const r = await cliRun(['exec', payload], o.cdpTimeoutMs || 45000);
-    if (!r.json) throw new Error('bridge cdp 无输出：' + String(r.stderr || r.stdout).slice(0, 200));
-    if (r.json.ok === false) throw new Error('bridge cdp 失败：' + String(r.json.error || '').slice(0, 200));
-    return r.json.result ? r.json.result.js_return : null;
+    const p = params || {};
+    // Runtime.evaluate：SYNC_SCRIPT 期望 CDP 原始返回 { result: { value } } / { exceptionDetails }。
+    // page.evaluate 已经把值取出来了，这里再包回 CDP 的形状，字段逻辑一行不用改。
+    if (method === 'Runtime.evaluate') {
+      try {
+        const value = await page.evaluate(p.expression);
+        return { result: { value } };
+      } catch (e) {
+        return { exceptionDetails: { text: String((e && e.message) || e) } };
+      }
+    }
+    // Page.navigate / Page.reload 在 opencli 的 CDP 白名单外，走它自己的导航命令。
+    if (method === 'Page.navigate') { await page.goto(String(p.url || '')); return {}; }
+    if (method === 'Page.reload') {
+      const url = await page.evaluate('location.href');
+      await page.goto(String(url || ''));
+      return {};
+    }
+    return await page.cdp(method, p);
   };
-  const captured = [];
-  const origLog = console.log;
-  console.log = (...a) => {
-    const s = a.map((x) => String(x)).join(' ');
-    if (s.indexOf(SENTINEL) === 0) captured.push(s.slice(SENTINEL.length));
-  };
-  let thrown = null;
+  cdp.calls = () => calls;
+  return cdp;
+}
+
+/** 打开（或复用）天源标签页，返回一个可用的 opencli page。 */
+async function openSyncPage(opts) {
+  const o = opts || {};
+  const { BrowserBridge } = await loadBrowserBridge();
+  const bridge = new BrowserBridge();
+  const page = await bridge.connect({ session: o.session || 'dsh-sync' });
+  // 切到天源：已有天源标签就复用（page.goto 会在当前租约页里导航）
+  await page.goto('https://ty.zhrdc.net/project/my');
+  return { bridge, page };
+}
+
+/**
+ * 跑一次同步，返回引擎输出的结构化结果。
+ * 字段逻辑与 SKILL 里验证过的 SYNC_SCRIPT 完全同一份，只换驱动。
+ */
+export async function runSync(data, opts) {
+  const o = opts || {};
+  const timeoutMs = o.timeoutMs || 300000;
+  let bridge = null;
   try {
-    const fn = new Function('return (' + SYNC_SCRIPT.toString() + ')')();
-    await fn(data, cdp, null, 2);   // bridge：2× 时序
+    const opened = await Promise.race([
+      openSyncPage(o),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('连接浏览器超时')), 60000)),
+    ]);
+    bridge = opened.bridge;
+    const page = opened.page;
+    const cdp = makeCdp(page);
+
+    // SYNC_SCRIPT 用 console.log 打哨兵；这里临时接管 console.log 捕获。
+    const captured = [];
+    const origLog = console.log;
+    console.log = (...a) => {
+      const line = a.map((x) => String(x)).join(' ');
+      if (line.indexOf(SENTINEL) === 0) captured.push(line.slice(SENTINEL.length));
+    };
+    let thrown = null;
+    const timer = setTimeout(() => { thrown = thrown || '同步超时（' + Math.round(timeoutMs / 1000) + 's）'; }, timeoutMs);
+    try {
+      const fn = new Function('return (' + SYNC_SCRIPT.toString() + ')')();
+      await fn(data, cdp, null, 1);   // opencli 进程内直连：1× 时序
+    } catch (e) {
+      thrown = String((e && e.message) || e);
+    } finally {
+      clearTimeout(timer);
+      console.log = origLog;
+    }
+
+    const last = captured.length ? captured[captured.length - 1] : null;
+    let out = null;
+    if (last) { try { out = JSON.parse(last); } catch (e) { out = null; } }
+    if (!out) out = { ok: false, msg: thrown || '同步引擎没有产出结果' };
+    if (thrown && out.ok) { out.ok = false; out.msg = thrown; }
+    out.engine = 'opencli';
+    try { out.cdpCalls = cdp.calls(); } catch (e) { /* 忽略 */ }
+    return out;
   } catch (e) {
-    thrown = String((e && e.message) || e);
+    const m = String((e && e.message) || e);
+    const code = /没找到 opencli|安装不完整|版本不兼容/.test(m) ? 'NO_OPENCLI'
+      : /Extension|not connected|extension/i.test(m) ? 'BRIDGE_DISCONNECTED'
+      : /超时/.test(m) ? 'TIMEOUT' : 'SYNC_FAIL';
+    return { ok: false, code, msg: m, engine: 'opencli' };
   } finally {
-    console.log = origLog;
+    try { if (bridge) await bridge.close(); } catch (e) { /* 忽略 */ }
   }
-  const last = captured.length ? captured[captured.length - 1] : null;
-  let out = null;
-  if (last) { try { out = JSON.parse(last); } catch (e) { out = null; } }
-  if (!out) out = { ok: false, msg: thrown || 'bridge 引擎没有产出结果' };
-  if (thrown && out.ok) { out.ok = false; out.msg = thrown; }
-  out.engine = 'bridge';
-  out.tabId = tabId;
-  out.cdpCalls = calls;
-  return out;
+}
+
+/**
+ * 只检查登录态，不写任何数据。
+ * 供「同步通道体检」用：打开天源首页，看是否被重定向到统一认证。
+ */
+export async function openSyncSpace() {
+  let bridge = null;
+  try {
+    const opened = await openSyncPage({});
+    bridge = opened.bridge;
+    const url = await opened.page.evaluate('location.href');
+    const logged = String(url).indexOf('auth.zhrdc.net') < 0;
+    return { ok: true, loggedIn: logged, url: String(url), engine: 'opencli',
+      msg: logged ? '已连接你的 Chrome，天源登录态正常' : '你的 Chrome 里还没有登录天源' };
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    return { ok: false, loggedIn: false, code: /没找到 opencli/.test(m) ? 'NO_OPENCLI' : 'BRIDGE_DOWN', msg: m, engine: 'opencli' };
+  } finally {
+    try { if (bridge) await bridge.close(); } catch (e) { /* 忽略 */ }
+  }
 }
