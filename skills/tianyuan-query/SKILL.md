@@ -2,7 +2,7 @@
 name: tianyuan-query
 description: |
   查询天源评估系统数据：项目列表、评估结论、公司评估方法汇总表、导出明细表/申报表。
-  触发条件：用户说"查评估结论 / 查天源项目 / 查某公司（如子公司A、子公司B、示例大酒店A等被评估单位）评估值 / 导明细表 / 导申报表"。
+  触发条件：用户说"查评估结论 / 查天源项目 / 查某被评估单位的评估值 / 导明细表 / 导申报表"。
   优先用本 skill 的标准操作顺序，3 次工具调用内完成查询，不要去 OneDrive 目录翻文件、不要手写 MCP 握手脚本。
 ---
 
@@ -12,7 +12,7 @@ description: |
 
 1. **拿 tyId**：调 `workbench_ty_projects`，可传 `keyword`（项目名/编号模糊匹配）。
    - 返回 `[{tyId, projectCode, projectName, department, status, baseDate}]`。
-   - 用户给的公司简称（如"子公司A"）通常出现在 projectName 里，用 keyword 过滤即可。
+   - 用户给的公司简称通常会出现在 projectName 里，用 keyword 过滤即可。
 2. **拿评估结论**：调 `workbench_ty_project_summary`，传 `tyId`。
    - 返回每家公司 `companyName / valuationValue / valueAdded / finalMethod / refreshed`。
    - 数值单位是**元**，逐字引用原始值，禁止四舍五入或换算成万元。
@@ -92,9 +92,11 @@ tycpv export-income-summary-table -p <projectId> [-c <companyIds>] -o <outDir>  
 4. 工具返回 0 条表述"未发现公开记录"，不得断言"一定没有"；调用失败必须说明失败原因，不得用推测数据补全。
 5. 任何输出不含 token、mcp-session-id、Authorization 头内容。
 
-## 验收基准（历史实测对照）
+## 验收基准（通用自验方法）
 
-- 项目"示例子公司股权转让-子公司A"（20261110001）→ `workbench_ty_project_summary` 的 evaluationValue 应为 **42471550.45** 元。
-- "示例子公司股权转让-示例大酒店A"（20261104002）→ **-16512535.92**。
-- "示例子公司股权转让-子公司B"（20261104001）→ **-30607563.81**。
-- 三家均为 100% 股权、资产基础法、市场价值、"拟收购股权"经济行为；签字评估师张三、刘青莹。
+具体的数值基准因项目而异，不写死在本技能里。回归自验按以下口径：
+
+1. 用 `workbench_ty_projects(keyword=<项目简称>)` 拿 tyId，确认 projectName / projectCode 与用户所指项目一致。
+2. 用 `workbench_ty_project_summary(tyId)` 取各公司 valuationValue / valueAdded / finalMethod / refreshed。
+3. 与用户上次认可的结论（或项目档案里的评估结论）逐字比对，单位是元；不一致时先核对基准日与 refreshed 口径再下结论，不得擅自改判。
+
