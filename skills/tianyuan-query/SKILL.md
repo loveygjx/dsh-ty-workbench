@@ -44,9 +44,17 @@ def post(payload, session_id=None):
     with urllib.request.urlopen(req, timeout=30) as resp:
         sid = resp.headers.get("mcp-session-id")
         text = resp.read().decode()
-    # SSE 响应：取 data: 开头行的 JSON
+    # 容错解析：通知类请求（payload 无 "id"）返回空 body 或 202，不解析直接返回 None；
+    # SSE 取 data: 行，无 data: 行再试整体 JSON，都失败返回 None（不要抛 JSONDecodeError）
+    if "id" not in payload:
+        return None, sid
     m = re.search(r"data: (.*)", text)
-    return (json.loads(m.group(1)) if m else json.loads(text)), sid
+    for raw in ([m.group(1)] if m else []) + ([text] if text.strip() else []):
+        try:
+            return json.loads(raw), sid
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None, sid
 
 # 1) initialize 握手，取 mcp-session-id
 _, sid = post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -57,7 +65,12 @@ post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
 # 3) tools/call（示例：get_my_projects）
 result, _ = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                   "params": {"name": "get_my_projects", "arguments": {}}}, sid)
-print(json.dumps(result["result"]["content"][0]["text"], ensure_ascii=False))
+# 注意：result 可能为 None（空响应容错），用前判空；get_my_projects 直接返回数组，无包装
+if result and "result" in result:
+    inner = json.loads(result["result"]["content"][0]["text"])
+    if isinstance(inner, list):
+        for p in inner:
+            print(p.get("id"), p.get("projectCode"), p.get("projectName"))
 ```
 
 常用远端工具（tools/list 共 30+ 个，入参均为 `projectId` 数字型）：
