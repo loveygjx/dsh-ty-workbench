@@ -3968,6 +3968,51 @@ export function apply(ctx) {
 
     return () => { for (const d of disposers) { try { d(); } catch (_) {} } };
   }, 'workbench: agent tools');
+
+  // ---------- 随插件分发的技能 ----------
+  // 宿主的 skill 发现路径只扫文件系统目录（<dshHome>/skills 等），不扫 node_modules，
+  // 所以打包进插件包的 SKILL.md 必须显式 register 才能被新会话的可用技能目录看到。
+  // 参考 dsh-codex-style-computer-use 的做法：懒注入 ['skills']，缺失时降级为一行日志，
+  // 不影响工具注册。用户在 <dshHome>/skills/tianyuan-query 有一份手工副本时，注册表按
+  // 层级取优先级更高的那份，不会冲突。正文每次激活时从磁盘重读，不与包内文件漂移。
+  ctx.effect(() => {
+    let skills = null;
+    try { skills = typeof ctx.get === 'function' ? ctx.get('skills') : null; } catch (_) { skills = null; }
+    if (!skills || typeof skills.register !== 'function') return () => {};
+    const skillDir = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'tianyuan-query');
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    let raw;
+    try { raw = readFileSync(skillFile, 'utf8'); } catch (e) {
+      ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能不可读: ' + e.message);
+      return () => {};
+    }
+    // 读 frontmatter 的 name/description；缺任何一个都不注册（和宿主校验口径一致）。
+    let name = '', desc = '';
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
+    if (fm) {
+      for (const line of fm[1].split(/\r?\n/)) {
+        const m = /^(name|description):\s*(.*)$/.exec(line);
+        if (m) { if (m[1] === 'name') name = m[2].trim(); else desc = m[2].trim(); }
+      }
+    }
+    if (!name || !desc) {
+      ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能缺 name/description frontmatter，未注册');
+      return () => {};
+    }
+    try {
+      skills.register({
+        name,
+        description: desc,
+        source: 'bundled',
+        content: raw.slice(fm ? fm[0].length : 0),
+        resourceBase: { kind: 'directory', path: skillDir },
+      });
+      ctx.logger && ctx.logger.info && ctx.logger.info('[workbench] 已注册内置技能 ' + name);
+    } catch (e) {
+      ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能注册被拒 (' + name + '): ' + e.message);
+    }
+    return () => {};
+  }, 'workbench: bundled skill registration');
 }
 export { name, inject };
 
