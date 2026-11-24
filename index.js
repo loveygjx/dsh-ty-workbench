@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { readFile, mkdir, mkdtemp, writeFile, rm, readdir, copyFile, rename, realpath, stat, link } from 'node:fs/promises';
-import { writeFileSync, existsSync, statSync } from 'node:fs';
+import { writeFileSync, existsSync, statSync, readFileSync } from 'node:fs';
 import { join, sep, dirname, relative, isAbsolute, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -3930,37 +3930,44 @@ export function apply(ctx) {
     let skills = null;
     try { skills = typeof ctx.get === 'function' ? ctx.get('skills') : null; } catch (_) { skills = null; }
     if (!skills || typeof skills.register !== 'function') return () => {};
-    const skillDir = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'tianyuan-query');
-    const skillFile = path.join(skillDir, 'SKILL.md');
-    let raw;
-    try { raw = readFileSync(skillFile, 'utf8'); } catch (e) {
-      ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能不可读: ' + e.message);
-      return () => {};
-    }
-    // 读 frontmatter 的 name/description；缺任何一个都不注册（和宿主校验口径一致）。
-    let name = '', desc = '';
-    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
-    if (fm) {
-      for (const line of fm[1].split(/\r?\n/)) {
-        const m = /^(name|description):\s*(.*)$/.exec(line);
-        if (m) { if (m[1] === 'name') name = m[2].trim(); else desc = m[2].trim(); }
-      }
-    }
-    if (!name || !desc) {
-      ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能缺 name/description frontmatter，未注册');
-      return () => {};
-    }
+    // 整段兜底：技能注册是附加能力，任何异常只降级为日志。
+    // 绝不能让它把 apply() 抛穿——那会把本 entry 之前注册的 82 条路由一并回滚，
+    // 前端只会看到宿主兜底的 404 "not found"（曾因 path 未导入踩过一次）。
     try {
-      skills.register({
-        name,
-        description: desc,
-        source: 'bundled',
-        content: raw.slice(fm ? fm[0].length : 0),
-        resourceBase: { kind: 'directory', path: skillDir },
-      });
-      ctx.logger && ctx.logger.info && ctx.logger.info('[workbench] 已注册内置技能 ' + name);
+      const skillDir = join(dirname(fileURLToPath(import.meta.url)), 'skills', 'tianyuan-query');
+      const skillFile = join(skillDir, 'SKILL.md');
+      let raw;
+      try { raw = readFileSync(skillFile, 'utf8'); } catch (e) {
+        ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能不可读: ' + e.message);
+        return () => {};
+      }
+      // 读 frontmatter 的 name/description；缺任何一个都不注册（和宿主校验口径一致）。
+      let name = '', desc = '';
+      const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
+      if (fm) {
+        for (const line of fm[1].split(/\r?\n/)) {
+          const m = /^(name|description):\s*(.*)$/.exec(line);
+          if (m) { if (m[1] === 'name') name = m[2].trim(); else desc = m[2].trim(); }
+        }
+      }
+      if (!name || !desc) {
+        ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能缺 name/description frontmatter，未注册');
+        return () => {};
+      }
+      try {
+        skills.register({
+          name,
+          description: desc,
+          source: 'bundled',
+          content: raw.slice(fm ? fm[0].length : 0),
+          resourceBase: { kind: 'directory', path: skillDir },
+        });
+        ctx.logger && ctx.logger.info && ctx.logger.info('[workbench] 已注册内置技能 ' + name);
+      } catch (e) {
+        ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能注册被拒 (' + name + '): ' + e.message);
+      }
     } catch (e) {
-      ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能注册被拒 (' + name + '): ' + e.message);
+      ctx.logger && ctx.logger.warn && ctx.logger.warn('[workbench] 内置技能注册异常，已跳过: ' + (e && e.message || e));
     }
     return () => {};
   }, 'workbench: bundled skill registration');

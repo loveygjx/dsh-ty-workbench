@@ -65,7 +65,8 @@
     "report-write-channel.js",
     "report-writeback.js",
     "report-diff.py",
-    "normalize_body_fonts.py", "skills/**"
+    "normalize_body_fonts.py",
+    "skills/**"
   ],
   "dsh": {
     "manifestVersion": 1,
@@ -87,5 +88,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs"
   }
 }
