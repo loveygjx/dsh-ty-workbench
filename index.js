@@ -3788,10 +3788,151 @@ export function apply(ctx) {
         try { mcp = await ty.status(); } catch (_) {}
         let cli = { installed: false, authenticated: false, state: 'unknown' };
         try { cli = cliAuth.status(); } catch (_) {}
+        // 天源直连接通路健康：MCP 可达性 + 可用工具数，让 Agent 一眼判断查询是否可用。
+        let tianyuan = { mcpReachable: false, toolCount: 0, lastCheckedAt: new Date().toISOString(), note: '' };
+        if (mcp.connected) {
+          try {
+            const list = await ty.listTools();
+            tianyuan.mcpReachable = true;
+            tianyuan.toolCount = Array.isArray(list) ? list.length : 0;
+          } catch (e) {
+            tianyuan.note = 'MCP 已配置但 tools/list 失败：' + String(e && e.message || e).slice(0, 120);
+          }
+        } else {
+          tianyuan.note = 'MCP 未授权，先在「工作 → 连接设置」完成天源授权，或运行 tycpv login 刷新 CLI。';
+        }
         return {
           mcp: { configured: !!mcp.connected, expired: !!mcp.expired, expiresAt: mcp.expiresAt || null, pending: !!mcp.pending },
           cli: { installed: !!cli.installed, authenticated: !!cli.authenticated, expiresAt: cli.expiresAt || null, state: cli.state || null, reason: cli.reason || '' },
+          tianyuan,
           note: 'MCP 与 CLI 是两套独立凭据；本地凭据存在不等于远端授权仍然有效。二者都失效时，先在「工作 → 连接设置」重新授权。',
+        };
+      },
+    }));
+
+    // 天源直连查询三件套：拿 tyId → 拿评估结论 → 拿公司口径汇总表。
+    // 数据纪律：聚合值逐字引用，禁止四舍五入/重算；refreshed=false 必须注明非最新口径。
+    const tyAmount = v => (v === null || v === undefined) ? null : v; // 数值原样透传，不改口径
+
+    // A1. 天源项目列表：用户问查天源项目/评估结论/导出天源表格时，先用本工具拿 tyId。
+    disposers.push(tools.register({
+      name: 'workbench_ty_projects',
+      isConcurrencySafe: () => true,
+      description: '查询天源评估系统里当前用户的全部评估项目（本地工作台之外的项目也在内）。用户提到查天源项目、查评估结论、导出天源表格时，先用本工具拿 tyId（数字项目 ID），不要去 OneDrive 目录翻文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: { type: 'string', description: '可选：按项目名或项目编号模糊过滤，不区分大小写。' },
+        },
+        additionalProperties: false,
+      },
+      output: { schema: outSchema, render: (_a, v) => text(v) },
+      async execute(args) {
+        const a = args && typeof args === 'object' ? args : {};
+        const r = await ty.callTool('get_my_projects', {});
+        const list = Array.isArray(r.data) ? r.data : [];
+        const kw = String(a.keyword || '').trim().toLowerCase();
+        const hit = kw
+          ? list.filter(p => [p.projectName, p.projectCode].some(x => String(x || '').toLowerCase().includes(kw)))
+          : list;
+        return {
+          ok: true,
+          total: hit.length,
+          projects: hit.map(p => ({
+            tyId: p.id,
+            projectCode: p.projectCode || null,
+            projectName: p.projectName || null,
+            department: p.executionDepartment || null,
+            status: p.projectStatus ?? null,
+            baseDate: p.evaluationBaseDate
+              ? new Date(p.evaluationBaseDate).toISOString().slice(0, 10)
+              : null,
+          })),
+          note: 'tyId 是天源数字项目 ID，后续用 workbench_ty_project_summary / workbench_ty_company_summary / workbench_export 时都作为 projectId 传入。',
+        };
+      },
+    }));
+
+    // A2. 项目汇总表：每家公司的最终评估结论。
+    disposers.push(tools.register({
+      name: 'workbench_ty_project_summary',
+      isConcurrencySafe: () => true,
+      description: '查询天源评估项目汇总表：每家公司的最终评估结论（评估价值/增减值/评估方法）。返回数值为元且逐字保留原始小数位，禁止四舍五入或换算成万元。refreshed=false 表示系统汇总未刷新，数据非最新底稿口径，回复时必须注明。',
+      parameters: {
+        type: 'object',
+        properties: {
+          tyId: { type: 'string', pattern: '^[0-9]+$', description: '天源数字项目 ID，来自 workbench_ty_projects 的 tyId 字段。' },
+        },
+        required: ['tyId'],
+        additionalProperties: false,
+      },
+      output: { schema: outSchema, render: (_a, v) => text(v) },
+      async execute(args) {
+        const a = args && typeof args === 'object' ? args : {};
+        const tyId = Number(String(a.tyId).trim());
+        if (!Number.isInteger(tyId) || tyId <= 0) return { ok: false, reason: 'tyId 必须是天源数字项目 ID' };
+        const r = await ty.callTool('get_project_summary', { projectId: tyId });
+        const j = r.data;
+        if (!j || typeof j !== 'object') return { ok: false, reason: 'get_project_summary 返回格式异常', raw: r.content };
+        const rows = Array.isArray(j.rows) ? j.rows : [];
+        const refreshed = !!(j.source && j.source.refreshed);
+        return {
+          ok: true,
+          projectId: tyId,
+          projectName: j.projectName || null,
+          refreshed,
+          note: refreshed
+            ? '系统汇总已刷新，为最新口径。'
+            : '系统汇总未刷新（refreshed=false），数据为系统缓存口径，非最新底稿结果，回复时必须注明。',
+          companies: rows.map(row => ({
+            companyName: row.companyName || null,
+            shareholdingRatePercent: row.shareholdingRatePercent ?? null,
+            valuationValue: tyAmount(row.valuationValue),
+            valueAdded: tyAmount(row.valueAdded),
+            finalMethod: row.finalMethod || null,
+            availableMethods: Array.isArray(row.availableMethods) ? row.availableMethods : [],
+            status: row.statusName || row.status || null,
+          })),
+        };
+      },
+    }));
+
+    // A3. 公司口径汇总表：资产基础法/收益法/市场法科目级汇总。
+    disposers.push(tools.register({
+      name: 'workbench_ty_company_summary',
+      isConcurrencySafe: () => true,
+      description: '查询天源项目下某家公司的评估方法汇总表（科目级结构化数据）。method: asset=资产基础法（默认）、income=收益法、market=市场法。需要先有 tyId；不确定 companyId 时可留空由系统返回全部公司。数值单位为元，逐字引用不换算。',
+      parameters: {
+        type: 'object',
+        properties: {
+          tyId: { type: 'string', pattern: '^[0-9]+$', description: '天源数字项目 ID。' },
+          companyId: { type: 'string', pattern: '^[0-9]+$', description: '可选：公司数字 ID（来自 workbench_ty_export 上下文或 get_project_companies）。留空返回全部公司。' },
+          method: { type: 'string', enum: ['asset', 'income', 'market'], description: '评估方法，默认 asset。' },
+        },
+        required: ['tyId'],
+        additionalProperties: false,
+      },
+      output: { schema: outSchema, render: (_a, v) => text(v) },
+      async execute(args) {
+        const a = args && typeof args === 'object' ? args : {};
+        const tyId = Number(String(a.tyId).trim());
+        if (!Number.isInteger(tyId) || tyId <= 0) return { ok: false, reason: 'tyId 必须是天源数字项目 ID' };
+        const method = ['income', 'market'].includes(a.method) ? a.method : 'asset';
+        const remoteTool = {
+          asset: 'get_company_asset_based_approach_summary',
+          income: 'get_company_income_approach_summary',
+          market: 'get_company_market_approach_summary',
+        }[method];
+        const call = {};
+        if (a.companyId) call.companyId = Number(String(a.companyId).trim());
+        const r = await ty.callTool(remoteTool, { projectId: tyId, ...call });
+        return {
+          ok: true,
+          projectId: tyId,
+          method,
+          remoteTool,
+          companyId: a.companyId ? Number(String(a.companyId).trim()) : null,
+          data: r.data ?? r.content ?? null,
         };
       },
     }));

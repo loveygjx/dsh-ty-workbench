@@ -17,6 +17,13 @@ let pending = null;         // { state, verifier, redirectUri, startedAt, timer,
 let mcpSession = null;      // Mcp-Session-Id from initialize
 let mcpSeq = 10;
 
+// session 失效（远端重启/超时）时重置握手状态；callTool 层据此做一次重试。
+function isSessionError(e) {
+  const msg = String(e && e.message || '');
+  return /no valid session|session.*(invalid|expired|失效)/i.test(msg) || (e && e.sessionInvalid === true);
+}
+function resetSession() { mcpSession = null; }
+
 async function loadAuth() {
   try {
     const raw = await readFile(STORE_PATH, 'utf8');
@@ -204,13 +211,25 @@ export async function listTools() {
   return tools.map(t => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} }));
 }
 export async function callTool(name, args) {
-  await ensureInit();
-  const r = await mcpRaw('tools/call', { name, arguments: args || {} }, ++mcpSeq);
-  if (r.data && r.data.error) throw new Error(r.data.error.message || 'tools/call 失败');
-  const result = r.data?.result || {};
-  const texts = (result.content || []).filter(c => c.type === 'text').map(c => c.text);
-  let parsed = null;
-    if (texts.length) { try { parsed = JSON.parse(texts.join(String.fromCharCode(10))); } catch (e) { parsed = texts.join(String.fromCharCode(10)); } }
-  return { content: result.content || [], structuredContent: result.structuredContent || null, data: parsed, isError: !!result.isError };
+  // session 失效时自动重新 initialize 再试一次；仍失败则透传错误（不做推测数据补全）。
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await ensureInit();
+    try {
+      const r = await mcpRaw('tools/call', { name, arguments: args || {} }, ++mcpSeq);
+      if (r.data && r.data.error) {
+        const msg = r.data.error.message || 'tools/call 失败';
+        if (attempt === 0 && isSessionError({ message: msg })) { resetSession(); continue; }
+        throw new Error(msg);
+      }
+      const result = r.data?.result || {};
+      const texts = (result.content || []).filter(c => c.type === 'text').map(c => c.text);
+      let parsed = null;
+      if (texts.length) { try { parsed = JSON.parse(texts.join(String.fromCharCode(10))); } catch (e) { parsed = texts.join(String.fromCharCode(10)); } }
+      return { content: result.content || [], structuredContent: result.structuredContent || null, data: parsed, isError: !!result.isError };
+    } catch (e) {
+      if (attempt === 0 && isSessionError(e)) { resetSession(); continue; }
+      throw e;
+    }
+  }
 }
 export { STORE_PATH };
