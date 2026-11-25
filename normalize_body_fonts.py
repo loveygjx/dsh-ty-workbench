@@ -25,9 +25,6 @@ import sys
 
 from docx import Document
 from docx.oxml.ns import qn
-from docx.shared import Pt
-from docx.enum.text import WD_LINE_SPACING
-import re
 
 # 明确属于西文字体、不该拿来渲染中文的字体名；命中就改回目标中文字体。
 LATIN_ONLY_FONTS = {
@@ -153,28 +150,6 @@ def normalize_document(document, ascii_font, east_asia_font):
     return runs, paragraphs, skipped
 
 
-def format_declaration_spacing(document):
-    """只处理独立的一级「声明」章节，遇到下个标题或分节结束。"""
-    paragraphs = document.paragraphs
-    matches = [i for i, p in enumerate(paragraphs)
-               if re.sub(r'\s+', '', p.text) == '声明' and _is_heading(p._p)]
-    if len(matches) != 1:
-        return 0
-    changed = 0
-    for p in paragraphs[matches[0] + 1:]:
-        if _is_heading(p._p):
-            break
-        if p.text.strip():
-            fmt = p.paragraph_format
-            if fmt.line_spacing_rule != WD_LINE_SPACING.EXACTLY or fmt.line_spacing != Pt(22):
-                fmt.line_spacing = Pt(22)
-                fmt.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-                changed += 1
-        if p._p.pPr is not None and p._p.pPr.sectPr is not None:
-            break
-    return changed
-
-
 def main(argv):
     if len(argv) < 2:
         emit(event="failed", reason="缺少 docx 路径参数")
@@ -192,7 +167,6 @@ def main(argv):
 
     try:
         runs, paragraphs, skipped = normalize_document(document, ascii_font, east_asia_font)
-        declaration_paragraphs = format_declaration_spacing(document)
     except Exception as exc:  # noqa: BLE001
         emit(event="failed", reason="处理正文失败：%s" % exc)
         return 1
@@ -201,8 +175,8 @@ def main(argv):
          skippedParagraphs=skipped, asciiFont=ascii_font)
 
     # 没有任何改动就不保存：保持文件字节不变，重复执行天然幂等
-    if not runs and not declaration_paragraphs:
-        emit(event="saved", path=path, runs=0, paragraphs=0, declarationParagraphs=0, changed=False)
+    if not runs:
+        emit(event="saved", path=path, runs=0, paragraphs=0, changed=False)
         return 0
 
     try:
@@ -211,8 +185,7 @@ def main(argv):
         emit(event="failed", reason="保存 docx 失败：%s" % exc)
         return 1
 
-    emit(event="saved", path=path, runs=runs, paragraphs=paragraphs,
-         declarationParagraphs=declaration_paragraphs, changed=True)
+    emit(event="saved", path=path, runs=runs, paragraphs=paragraphs, changed=True)
     return 0
 
 
