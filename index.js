@@ -1254,6 +1254,46 @@ const TY_EXPORT_KINDS = {
   detail: { sub: 'export-asset-detail-table', fmt: 'appraisal-detail-print-format/scripts/adjust_appraisal_detail_print.py', label: '明细表' },
   declare: { sub: 'export-asset-declare-table', fmt: 'appraisal-declaration-print-format/scripts/adjust_appraisal_declaration_print.py', label: '申报表' },
 };
+
+// ---------- 导出页脚配置 ----------
+// 存独立 JSON（不进 工作台数据.json：那份数据由前端整体覆盖保存，页脚混进去
+// 会被没带页脚字段的保存请求静默冲掉）。结构：{ [projectId]: { [companyId]: { preparer, date, appraisers } } }。
+const FOOTER_FILE = '导出页脚.json';
+function footerStorePath(dir) { return join(dir, FOOTER_FILE); }
+function normalizeFooterEntry(v) {
+  if (!v || typeof v !== 'object') return null;
+  const s = x => (typeof x === 'string' ? x.slice(0, 200) : '');
+  const entry = { preparer: s(v.preparer), date: s(v.date), appraisers: s(v.appraisers) };
+  if (!entry.preparer && !entry.date && !entry.appraisers) return null;   // 三项全空视为未配置
+  return entry;
+}
+async function readFooterStore() {
+  const cfg = await store.config();
+  const file = footerStorePath(cfg.dir);
+  try {
+    const j = JSON.parse(await readFile(file, 'utf8'));
+    if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error('页脚配置不是有效的对象');
+    return j;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return {};
+    throw err;
+  }
+}
+async function writeFooterStore(next) {
+  const cfg = await store.config();
+  const file = footerStorePath(cfg.dir);
+  await mkdir(cfg.dir, { recursive: true });
+  const tmp = file + '.tmp';
+  await writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
+  try { if (existsSync(file)) await rename(file, file + '.bak'); } catch (_) {}
+  await rename(tmp, file);
+  return file;
+}
+// 页脚写入器：与 index.js 同目录，复用格式脚本同一 python（优先工作台 venv，退回系统 python3）。
+const FOOTER_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'footer_workbook.py');
+const FILL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'fill_print_height.py');
+const SAFE_FILL_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'safe_fill_rows.py');
+
 function tyExportSkillsDir() {
   return [
     process.env.TIANYUAN_PRINT_SKILLS_DIR,
@@ -1309,28 +1349,70 @@ async function runTyExport(b) {
         if (!(await stat(outputRoot)).isDirectory()) throw new Error('not a directory');
       } catch (_) { return { status: 400, body: { ok: false, error: '输出目录不存在或不是文件夹' } }; }
     }
-    // 先建立父目录，再独占建立批次，避免误用已存在的批次。
-    const batchId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + Math.random().toString(36).slice(2, 10);
-    const batchParent = join(outputRoot, folder, cfg.label);
-    await mkdir(batchParent, { recursive: true });
-    outDir = join(batchParent, batchId);
-    await mkdir(outDir);
+    // 批次直接位于输出根目录；mkdtemp 原子创建，避免同一时刻的导出冲突。
+    const batchTime = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+    await mkdir(outputRoot, { recursive: true });
+    outDir = await mkdtemp(join(outputRoot, folder + '-' + cfg.label + '-' + batchTime + '-'));
     rememberExportBatch(await realpath(outDir));
     setProg({ stage: 'export', msg: '正在调用 tycpv 导出（可能需要几分钟）…' });
 
-    const args = [cfg.sub, '-p', projectId, '-o', outDir];
-    if (companyIds) args.push('-c', companyIds);
-    const cli = await runCli(tycpv, args, 15 * 60 * 1000);
-    if (cli.code !== 0) {
-      clearProg();
-      const why = tail(cli.stderr, 3) || tail(cli.stdout, 3);
-      if (/缺少 MCP token|本地登录.*过期/i.test(why)) return { status: 401, body: { ok: false, outDir, error: 'CLI 没有可用凭据。请到「工作 → 连接设置」点击「授权 CLI」并完成浏览器登录；MCP 和 CLI 授权相互独立。' } };
-      return { status: 502, body: { ok: false, outDir, error: 'tycpv 导出失败（退出码 ' + cli.code + '）。请检查 CLI 授权和项目权限。' } };
+    // 逐公司调用 CLI（各自独立输出目录）：公司 ID 与输出文件的对应关系才可靠，
+    // 一次批量调用只有文件名，靠文件名猜公司属于猜测，禁止。
+    const idList = companyIds ? companyIds.split(',') : [];
+    const cliResults = [];
+    if (!idList.length) {
+      const args = [cfg.sub, '-p', projectId, '-o', outDir];
+      const cli = await runCli(tycpv, args, 15 * 60 * 1000);
+      if (cli.code !== 0) {
+        clearProg();
+        const why = tail(cli.stderr, 3) || tail(cli.stdout, 3);
+        if (/缺少 MCP token|本地登录.*过期/i.test(why)) return { status: 401, body: { ok: false, outDir, error: 'CLI 没有可用凭据。请到「工作 → 连接设置」点击「授权 CLI」并完成浏览器登录；MCP 和 CLI 授权相互独立。' } };
+        return { status: 502, body: { ok: false, outDir, error: 'tycpv 导出失败（退出码 ' + cli.code + '）。请检查 CLI 授权和项目权限。' } };
+      }
+      cliResults.push(outDir);
+    } else {
+      for (const [ci, cid] of idList.entries()) {
+        const perDir = join(outDir, cid);
+        await mkdir(perDir, { recursive: true });
+        setProg({ stage: 'export', done: ci, total: idList.length, msg: '正在导出公司 ' + cid + '（' + (ci + 1) + '/' + idList.length + '）…' });
+        const args = [cfg.sub, '-p', projectId, '-c', cid, '-o', perDir];
+        const cli = await runCli(tycpv, args, 15 * 60 * 1000);
+        if (cli.code !== 0) {
+          const why = tail(cli.stderr, 3) || tail(cli.stdout, 3);
+          if (/缺少 MCP token|本地登录.*过期/i.test(why)) return { status: 401, body: { ok: false, outDir, error: 'CLI 没有可用凭据。请到「工作 → 连接设置」点击「授权 CLI」并完成浏览器登录；MCP 和 CLI 授权相互独立。' } };
+          // 非零退出不能以部分文件存在推断成功；保留批次供排查，不进入后处理。
+          clearProg();
+          return { status: 502, body: { ok: false, outDir, error: 'tycpv 导出公司 ' + cid + ' 失败（退出码 ' + cli.code + '）；已有文件可能不完整，未进行后处理：' + why } };
+        }
+        cliResults.push(perDir);
+      }
     }
     const after = new Set(); await walkXlsx(outDir, after);
     const exported = [...after];
+
     if (!exported.length) { clearProg(); return { status: 500, body: { ok: false, outDir, error: 'tycpv 已退出但目录里没有新 xlsx：' + outDir } }; }
     setProg({ stage: 'process', done: 0, total: exported.length, file: '', msg: '开始逐个工作簿整理…' });
+
+    // 页脚配置：按请求里的公司 ID 精确匹配；CLI 若按公司分了子目录（目录名是公司 ID），
+    // 目录里的工作簿直接绑定该 ID；目录名对不上任何所选公司 ID 的工作簿不写页脚（不猜文件名）。
+    const footerByCompany = new Map();
+    const footerWarnings = [];
+    if (b.applyFooters !== false) {
+      try {
+        const fstore = await readFooterStore();
+        const projFooters = fstore[projectId] || {};
+        if (!companyIds && Object.keys(projFooters).length) footerWarnings.push('未指定公司，无法可靠匹配公司页脚，本批次未写入页脚。');
+        const wanted = new Set(companyIds ? companyIds.split(',') : []);
+        for (const srcPath of exported) {
+          const segs = relative(outDir, dirname(srcPath)).split(sep).filter(Boolean);
+          // 只有逐公司 CLI 创建的第一层目录可证明身份；深层数字可能是项目编号。
+          const compSeg = segs[0] && wanted.has(segs[0]) ? segs[0] : undefined;
+          if (compSeg && normalizeFooterEntry(projFooters[compSeg])) {
+            footerByCompany.set(srcPath, normalizeFooterEntry(projFooters[compSeg]));
+          }
+        }
+      } catch (err) { footerWarnings.push('页脚配置读取失败，未写入页脚：' + String(err && err.message || err)); }
+    }
 
     const results = [];
     for (const [fi, src] of exported.entries()) {
@@ -1344,6 +1426,7 @@ async function runTyExport(b) {
       const stage = join(dir, stageStem + ext);
       const reportTemp = join(dir, stageStem + '_链接恢复对比报告.xlsx');
       const stages = [];
+      const warnings = [...footerWarnings];
       let reportPath = null, reportLinked = false;
       setProg({ stage: 'process', done: fi, total: exported.length, file: stem, msg: '正在整理：' + stem });
       try {
@@ -1358,9 +1441,58 @@ async function runTyExport(b) {
           if (existsSync(reportTemp)) reportPath = join(dir, stem + '_链接恢复对比报告.xlsx');
         }
         if (applyFormat) {
-          const r = await runCli(pyBin, [fmtScript, stage, '--no-backup'], 5 * 60 * 1000);
+          // 申报脚本的格式动作保留；其自带的正则平移插删行跳过（--skip-fill），
+          // 增删行统一由下方 safe_fill_rows（结构规则 + LibreOffice 桥）完成。
+          const fmtArgs = [fmtScript, stage, '--no-backup'];
+          if (b.kind === 'declare') fmtArgs.push('--skip-fill');
+          const r = await runCli(pyBin, fmtArgs, 5 * 60 * 1000);
           if (r.code !== 0) throw new Error('设置格式失败：' + (tail(r.stderr, 3) || tail(r.stdout, 3) || ('退出码 ' + r.code)));
           stages.push('apply_format');
+        }
+        // 页脚写入必须排在格式整理之后：申报格式脚本会清掉 right 页脚的评估人员模板，
+        // 先写会被清空；restore 脚本不碰页脚，但同样在其后写入最稳妥。
+        const footerInfo = footerByCompany.get(src);
+        if (footerInfo) {
+          const fargs = [FOOTER_SCRIPT, '--workbook', stage, '--kind', String(b.kind)];
+          if (footerInfo.preparer) fargs.push('--preparer', footerInfo.preparer);
+          if (footerInfo.date) fargs.push('--date', footerInfo.date);
+          if (b.kind === 'detail' && footerInfo.appraisers) fargs.push('--appraisers', footerInfo.appraisers);
+          const fr = await runCli(pyBin, fargs, 120000);
+          if (fr.code !== 0) throw new Error('写入页脚失败：' + (tail(fr.stderr, 3) || tail(fr.stdout, 3) || ('退出码 ' + fr.code)));
+          stages.push('footer');
+        }
+        // 打印页空白安全增删行：明细与申报同一逻辑，按通用结构规则执行；
+        // 不确定即跳过并告警，不阻断导出。
+        if (b.applyFill !== false) {
+          const fillJavaHome = process.env.TY_FILL_JAVA_HOME || join(homedir(), '.tianyuan-workbench', 'dependencies', 'jdk-17', 'Contents', 'Home');
+          const fillSoffice = '/Applications/LibreOffice.app/Contents/MacOS/soffice';
+          const fillJars = '/Applications/LibreOffice.app/Contents/Resources/java';
+          const fillBridge = join(dirname(fileURLToPath(import.meta.url)), 'tools', 'uno_bridge', 'row_bridge.py');
+          const fillReady = existsSync(fillJavaHome) && existsSync(fillSoffice)
+            && existsSync(fillJars) && existsSync(SAFE_FILL_SCRIPT) && existsSync(fillBridge);
+          if (!fillReady) {
+            warnings.push('自动增删行已暂停：缺少 LibreOffice/JDK 桥组件，未执行此步骤。');
+          } else {
+            const fillOut = join(dir, stageStem + '_filled.xlsx');
+            const fargs = [SAFE_FILL_SCRIPT, '--workbook', stage, '--output', fillOut, '--kind', String(b.kind),
+              '--java-home', fillJavaHome, '--soffice', fillSoffice, '--uno-jars', fillJars, '--bridge', fillBridge];
+            const g = await runCli(pyBin, fargs, 600000);
+            let parsed = null;
+            try { parsed = JSON.parse((g.stdout || '').trim().split('\n').pop()); } catch (_) {}
+            if (g.code === 0 && parsed && parsed.ok && Array.isArray(parsed.changed) && parsed.changed.length > 0) {
+              await rename(fillOut, stage);
+              const totalRows = parsed.changed.reduce((n, c) => n + (c.rows || 0), 0);
+              stages.push('safe_fill_rows:' + parsed.changed.length + '表' + totalRows + '行');
+              for (const c of parsed.changed) warnings.push(`自动增删行：${c.sheet} ${c.op === 'insert' ? '插入' : '删除'} ${c.rows} 空白行以填满打印页。`);
+            } else {
+              const reasons = parsed && Array.isArray(parsed.skipped)
+                ? parsed.skipped.map(s => s.reason).filter(r => r && r !== 'unsupported_template').slice(0, 3).join('、') : '';
+              try { await rm(fillOut, { force: true }); } catch (_) {}
+              warnings.push('自动增删行已暂停：' + (g.code !== 0 ? ('执行失败 ' + g.code) : (reasons ? '工作表未匹配安全模板（' + reasons + '）' : '无符合安全条件的调整')) + '。');
+            }
+          }
+        } else {
+          warnings.push('打印页空白的自动增删行未启用。');
         }
         const v = await verifyZip(stage);
         if (v.code !== 0) throw new Error('文件校验失败（zip 结构异常）');
@@ -1368,7 +1500,7 @@ async function runTyExport(b) {
         if (reportPath) { await link(reportTemp, reportPath); reportLinked = true; }
         await rename(stage, src);
         if (reportLinked) { try { await rm(reportTemp); } catch (_) {} }
-        results.push({ ok: true, sourcePath: src, outputPath: src, reportPath, stages });
+        results.push({ ok: true, sourcePath: src, outputPath: src, reportPath, stages, warnings });
       } catch (fe) {
         if (reportLinked) { try { await rm(reportPath); } catch (_) {} }
         try { if (existsSync(stage)) await rm(stage); } catch (e) {}
@@ -1736,7 +1868,7 @@ export function apply(ctx) {
   const G = globalThis;
   // 版本号写进 ~/.dsh/workbench-host-applied.json 的 rev 字段，排障时用来确认
   // 运行中的进程到底加载了哪一版宿主代码。改了宿主逻辑就往上加一。
-  const REV = 'rev53';
+  const REV = 'rev58-generic-fill-declare';
   // 路由归属表：path -> 「注册它的那个 apply() 实例」的 token。
   //
   // 为什么不用「REV 布尔标记挡住第二次 apply」：宿主半侧有两个 entry（主包 + 仅宿主的
@@ -2235,19 +2367,27 @@ export function apply(ctx) {
               await mkdir(outDir, { recursive: true });
             }
             const setProg = patch => { if (exportProgress.size > 50) { let oldest = null; for (const [k, v] of exportProgress) if (!oldest || v.at < oldest.at) oldest = { k, at: v.at }; if (oldest) exportProgress.delete(oldest.k); } exportProgress.set(jobId, { at: Date.now(), ...patch }); };
-            setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, message: '连接你的浏览器…' });
+            setProg({ status: 'running', stage: 'running', total: items.length, done: 0, pct: 0, files: [], errors: [], outDir, message: '连接你的浏览器…' });
 
             (async () => {
               try {
-                setProg({ status: 'running', stage: 'running', total: items.length, done: 0, files: [], errors: [], outDir, engine: 'browser', message: '正在驱动你的浏览器执行导出…' });
+                setProg({ status: 'running', stage: 'running', total: items.length, done: 0, pct: 0, files: [], errors: [], outDir, engine: 'browser', message: '正在驱动你的浏览器执行导出…' });
                 const normItems = items.map(i => ({ companyId: String(i.companyId), companyName: i.companyName || '', type: Number(i.type), mode: i.mode }));
                 if (!rb.resolveOpencliBin()) {
-                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: ['未找到 opencli（你的浏览器通道）。请安装 opencli 后重试。'], outDir, message: '缺少 opencli' });
+                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, pct: 0, files: [], errors: ['未找到 opencli（你的浏览器通道）。请安装 opencli 后重试。'], outDir, message: '缺少 opencli' });
                   return;
                 }
                 const r = await rb.exportReports({
                   projectId, items: normItems,
                   onLog: (m) => { const cur = exportProgress.get(jobId); if (cur) setProg({ ...cur, at: Date.now(), logs: [...(cur.logs || []), m].slice(-200) }); },
+                  // 抓取阶段占总进度的 0~80%：下载完还要逐份校验、归正字体、排表格，
+                  // 那段时间同样在等，不能让进度条停在 80% 装死。
+                  onProgress: (p) => {
+                    const cur = exportProgress.get(jobId); if (!cur) return;
+                    const total = Math.max(1, Number(p.total) || normItems.length || 1);
+                    const pct = Math.min(80, Math.round((Math.max(0, Number(p.done) || 0) / total) * 80));
+                    setProg({ ...cur, at: Date.now(), stage: 'fetching', done: Math.max(0, Number(p.done) || 0), total, pct, message: p.message || cur.message });
+                  },
                 });
                 if (!r || !r.ok) {
                   const notLogged = r && (r.code === 'NOT_LOGGED_IN' || r.code === 'BRIDGE_DISCONNECTED');
@@ -2256,12 +2396,20 @@ export function apply(ctx) {
                     ? String((r && r.detail) || (r && r.msg) || '连不上浏览器')
                     : notLogged ? '你的浏览器未登录天源：请在浏览器里登录一次后重试'
                     : String((r && (r.msg || r.code || r.detail)) || '导出失败');
-                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: [msg], outDir, engine: 'browser', message: bridgeDown ? '连不上浏览器' : (notLogged ? '需要登录天源' : '导出失败'), logs: (r && r.logs) || [] });
+                  // 失败也代表作业结束：不要把进度条打回 0，否则用户看到「跑着跑着归零」。
+                  // 抓取阶段的进度保留在 cur 里，界面按已推进到哪一步显示。
+                  const curFail = exportProgress.get(jobId) || {};
+                  setProg({ status: 'failed', stage: 'failed', total: items.length, done: curFail.done || 0, pct: (curFail.pct == null ? 0 : curFail.pct), files: [], errors: [msg], outDir, engine: 'browser', message: bridgeDown ? '连不上浏览器' : (notLogged ? '需要登录天源' : '导出失败'), logs: (r && r.logs) || [] });
                   return;
                 }
                 const files = []; const errors = Array.isArray(r.errors) ? r.errors.slice() : [];
                 const fmtErrors = [];
+                const totalFiles = (r.files || []).length;
+                let procIndex = 0;
                 for (const f of (r.files || [])) {
+                  const curP = exportProgress.get(jobId);
+                  if (curP) setProg({ ...curP, at: Date.now(), stage: 'writing', pct: 80 + Math.round((procIndex / Math.max(1, totalFiles)) * 20), message: '正在保存并排版第 ' + (procIndex + 1) + ' / ' + totalFiles + ' 份：' + (f.companyName || '') + ' ' + (({ 1: '评估报告', 2: '评估说明', 3: '长投说明' })[Number(f.type)] || '') });
+                  procIndex += 1;
                   try {
                     const buf = Buffer.from(String(f.base64 || ''), 'base64');
                     // 产物完整性校验：不凭扩展名与退出码。完整解析 ZIP + 必需部件，
@@ -2371,12 +2519,13 @@ export function apply(ctx) {
                 }
                 setProg({
                   status: okAll ? 'done' : (files.length ? 'partial' : 'failed'), stage: okAll ? 'done' : (files.length ? 'partial' : 'failed'),
-                  total: items.length, done: items.length, files, errors, outDir, applyFormat, engine: 'browser',
+                  total: items.length, done: items.length, pct: 100, files, errors, outDir, applyFormat, engine: 'browser',
                   message: okAll ? ('完成：' + files.length + ' 份原生文档' + suffix) : (files.length ? ('部分完成：' + files.length + ' 份成功，' + errors.length + ' 项失败') : '导出失败'),
                   logs: r.logs || [],
                 });
               } catch (e) {
-                setProg({ status: 'failed', stage: 'failed', total: items.length, done: 0, files: [], errors: [String(e.message || e)], outDir, message: '作业异常' });
+                const curEx = exportProgress.get(jobId) || {};
+                setProg({ status: 'failed', stage: 'failed', total: items.length, done: curEx.done || 0, pct: (curEx.pct == null ? 0 : curEx.pct), files: [], errors: [String(e.message || e)], outDir, message: '作业异常' });
               }
             })();
             return json({ ok: true, jobId, outDir });
@@ -2720,8 +2869,10 @@ export function apply(ctx) {
           // 串行执行各类型；任一类型失败记录错误继续其余类型。
           (async () => {
             const files = [], errors = [];
-            for (const t of types) {
+            for (let typeIndex = 0; typeIndex < types.length; typeIndex++) {
+              const t = types[typeIndex];
               const typeName = TYPE_NAMES[t];
+              const basePct = Math.round((typeIndex / Math.max(1, types.length)) * 100);
               // 每次调用使用独立目录，绝不把上次遗留的 Word 当成本次产物。
               let outDir;
               try {
@@ -2732,13 +2883,13 @@ export function apply(ctx) {
                 errors.push(typeName + '：无法创建导出批次：' + String(e.message || e));
                 continue;
               }
-              exportProgress.set(jobId, { at: Date.now(), status: 'running', stage: 'running', outDir, message: `正在导出「${typeName}」（拉取数据、变量并生成官方格式 Word）…` });
+              exportProgress.set(jobId, { at: Date.now(), status: 'running', stage: 'running', outDir, pct: basePct, message: `正在导出「${typeName}」（拉取数据、变量并生成官方格式 Word）…` });
               const args = ['export-report-docx', '--project', projectId, '--type', String(t), '--out', outDir];
               if (companyIds) args.push('--company', companyIds); else args.push('--company-all');
               const res = await new Promise(resolve => {
                 const child = spawn(cli, args, { stdio: ['ignore', 'pipe', 'pipe'] });
                 let cout = '', cerr = '';
-                child.stdout.on('data', d => { cout += d; if (exportProgress.get(jobId)) exportProgress.set(jobId, { at: Date.now(), status: 'running', stage: 'running', outDir, message: `「${typeName}」` + (tail(cout, 1) || '导出中…') }); });
+                child.stdout.on('data', d => { cout += d; const cur = exportProgress.get(jobId); if (cur) exportProgress.set(jobId, { ...cur, at: Date.now(), status: 'running', stage: 'running', outDir, pct: basePct, message: `「${typeName}」` + (tail(cout, 1) || '导出中…') }); });
                 child.stderr.on('data', d => { cerr += d; });
                 child.on('error', e => { cerr += String(e); });
                 // 把 code 与输出一起返回，避免在 Promise 作用域外引用局部变量。
@@ -2757,7 +2908,7 @@ export function apply(ctx) {
               if (dir.startsWith(st0.dir) || dir.startsWith(root)) rememberExportBatch(dir);
             }
             const okAll = errors.length === 0;
-            exportProgress.set(jobId, { at: Date.now(), status: okAll ? 'done' : files.length ? 'partial' : 'failed', stage: okAll ? 'done' : files.length ? 'partial' : 'failed', outDir: root, files, message: okAll ? `完成：生成 ${files.length} 份 Word` : (files.length ? `部分完成（${files.length} 份）。失败：${errors.join('；')}` : '导出失败：' + errors.join('；')) });
+            exportProgress.set(jobId, { at: Date.now(), status: okAll ? 'done' : files.length ? 'partial' : 'failed', stage: okAll ? 'done' : files.length ? 'partial' : 'failed', outDir: root, pct: 100, files, message: okAll ? `完成：生成 ${files.length} 份 Word` : (files.length ? `部分完成（${files.length} 份）。失败：${errors.join('；')}` : '导出失败：' + errors.join('；')) });
           })();
           return json({ ok: true, jobId, outDir: root });
         } catch (e) { return json({ ok: false, error: String(e.message || e) }, 500); }
@@ -2782,22 +2933,58 @@ export function apply(ctx) {
       },
     },
     {
-      // 仅列出用户指定目录的工作簿，不跟随目录项中的符号链接。
-      path: PREFIX + '/ty/export/files', methods: ['POST'], fetch: async (req) => {
+      // 导出页脚配置：按项目 × 公司存取（独立 JSON，不被前端整体保存冲掉）。
+      // GET 与 POST 同 path：路由表按 path 去重（owners.has），必须合在一条路由里按 method 分发。
+      path: PREFIX + '/ty/export/footers', methods: ['GET', 'POST'], fetch: async (req) => {
         try {
+          if (req.method === 'GET') {
+            const u = new URL(req.url, 'http://127.0.0.1');
+            const projectId = String(u.searchParams.get('projectId') || '').trim();
+            if (!/^\d+$/.test(projectId)) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
+            const fstore = await readFooterStore();
+            const proj = fstore[projectId] || {};
+            const footers = {};
+            for (const [cid, v] of Object.entries(proj)) {
+              const e = normalizeFooterEntry(v);
+              if (e) footers[cid] = e;
+            }
+            return json({ ok: true, footers });
+          }
+          // POST：保存 { projectId, footers }
           const b = await req.json();
-          if (typeof b.dir !== 'string' || !isAbsolute(b.dir)) return json({ ok: false, error: '请填写文件夹绝对路径' }, 400);
-          const dir = await realpath(b.dir);
-          if (!(await stat(dir)).isDirectory()) return json({ ok: false, error: '请选择文件夹' }, 400);
-          const entries = await readdir(dir, { withFileTypes: true });
-          const files = entries.filter(e => e.isFile() && /\.(xlsx|xlsm)$/i.test(e.name)).map(e => ({ name: e.name, path: join(dir, e.name) })).sort((a, b) => a.name.localeCompare(b.name));
-          return json({ ok: true, dir, files: files.slice(0, 500), truncated: files.length > 500 });
-        } catch (_) { return json({ ok: false, error: '无法读取该文件夹' }, 400); }
+          const projectId = String(b.projectId || '').trim();
+          if (!/^\d+$/.test(projectId)) return json({ ok: false, error: 'projectId 必须为数字' }, 400);
+          if (!b.footers || typeof b.footers !== 'object' || Array.isArray(b.footers)) return json({ ok: false, error: 'footers 必须为 {公司ID:{preparer,date,appraisers}}' }, 400);
+          const cleaned = {};
+          for (const [cid, v] of Object.entries(b.footers)) {
+            if (!/^\d+$/.test(String(cid))) return json({ ok: false, error: '公司 ID 必须为数字：' + String(cid) }, 400);
+            const e = normalizeFooterEntry(v);
+            if (e) cleaned[cid] = e;   // 三项全空的条目直接剔除（视为删除）
+          }
+          const fstore = await readFooterStore();
+          if (Object.keys(cleaned).length) fstore[projectId] = cleaned;
+          else delete fstore[projectId];   // 全部清空就移除该项目的配置
+          await writeFooterStore(fstore);
+          return json({ ok: true, saved: Object.keys(cleaned).length, file: FOOTER_FILE });
+        } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
       },
     },
     {
-      // 手动整理始终输出到独立批次，不覆盖用户选择的源工作簿。
-      path: PREFIX + '/ty/export/manual', methods: ['POST'], fetch: async (req) => {
+      path: PREFIX + '/ty/export/files', methods: ['POST'], fetch: async (req) => {
+          try {
+            const b = await req.json();
+            if (typeof b.dir !== 'string' || !isAbsolute(b.dir)) return json({ ok: false, error: '请填写文件夹绝对路径' }, 400);
+            const dir = await realpath(b.dir);
+            if (!(await stat(dir)).isDirectory()) return json({ ok: false, error: '请选择文件夹' }, 400);
+            const entries = await readdir(dir, { withFileTypes: true });
+            const files = entries.filter(e => e.isFile() && /\.(xlsx|xlsm)$/i.test(e.name)).map(e => ({ name: e.name, path: join(dir, e.name) })).sort((a, b) => a.name.localeCompare(b.name));
+            return json({ ok: true, dir, files: files.slice(0, 500), truncated: files.length > 500 });
+          } catch (_) { return json({ ok: false, error: '无法读取该文件夹' }, 400); }
+        },
+      },
+      {
+        // 手动整理始终输出到独立批次，不覆盖用户选择的源工作簿。
+        path: PREFIX + '/ty/export/manual', methods: ['POST'], fetch: async (req) => {
         try {
           const body = await req.json();
           const jobId = /^[A-Za-z0-9_-]{6,64}$/.test(String(body.jobId || '')) ? String(body.jobId) : '';
@@ -3896,7 +4083,7 @@ export function apply(ctx) {
       parameters: {
         type: 'object',
         properties: {
-          kind: { type: 'string', enum: ['detail', 'declare'], description: 'detail 导出明细表（默认恢复公式并设置格式）；declare 导出申报表（只设置申报表格式，不恢复公式）。' },
+          kind: { type: 'string', enum: ['detail', 'declare'], description: 'detail 导出明细表（默认恢复公式并设置格式）；declare 导出申报表（设置申报表格式并做安全增删行，不恢复公式）。' },
           projectId: { type: 'string', pattern: '^[0-9]+$', description: '天源数字项目 ID，等于 workbench_projects 返回的 tyId。' },
           projectCode: { type: 'string', description: '可选：项目编号，仅用于拼输出目录名，例如「20261110001」。' },
           projectName: { type: 'string', description: '可选：项目简称，仅用于拼输出目录名。' },

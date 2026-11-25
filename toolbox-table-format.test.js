@@ -366,7 +366,10 @@ d.save(sys.argv[1])
  *   - 第一张表在附件标题之前（正文表）
  *   - 第二张表在附件标题之后，但没写 tblCellMar（天源自己生成的表）
  *   - 第三张表在附件标题之后，写了 tblCellMar（外部 Word 粘进来的表）
- * 期望：只有第三张被跳过。
+ * 期望：三张全部照样排版。附件区的表不再靠"外部粘贴指纹"跳过——天源的股权
+ * 结构表（股东名称/认缴出资金额/…）与外部粘贴表的 tblPr 指纹完全重合，
+ * 曾经跳过它们导致用户报告的"表格被跳过设置"；真正人工调过的表由
+ * is_already_formatted 挡住，不等宽的网格不会被硬改，两层保护足够。
  */
 function makeAttachmentDocx(path) {
   const docxPath = path + '.docx';
@@ -413,16 +416,16 @@ d.save(sys.argv[1])
   return docxPath;
 }
 
-test('附件区只跳过外部 Word 表，天源自己生成的照样处理', { skip: !existsSync(SCRIPT) && '本机未安装评估工具箱' }, () => {
+test('附件区的表全部照样排版（不再按外部粘贴指纹跳过）', { skip: !existsSync(SCRIPT) && '本机未安装评估工具箱' }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'tbx-att-'));
   const doc = makeAttachmentDocx(join(dir, 'att'));
   const env = { TIANYUAN_TABLE_FORMAT_CONFIG: JSON.stringify({ ...rules(SAMPLE), fontSizePt: 10.5 }) };
   const r = runScript(doc, env);
   assert.equal(r.attachmentFound, true, 'fixture 必须能识别出附件标题');
-  assert.equal(r.skippedAttachmentTables, 1, '附件区里只有外部 Word 表被跳过');
-  assert.equal(r.tableCount, 2, '正文表 + 附件区里的天源表都要处理');
+  assert.equal(r.skippedAttachmentTables, 0, '附件区不再跳过任何表（天源股权表曾被误判）');
+  assert.equal(r.tableCount, 3, '正文表 + 附件区两张表全部处理');
 
-  // 三张表里，只有外面那张没被套上格式
+  // 三张表里，每张都套上了 10.5 磅
   const out = execFileSync(PY, ['-c', `
 import zipfile,sys,json
 from lxml import etree
@@ -437,7 +440,7 @@ print(json.dumps(res))
   const sizes = JSON.parse(out);
   assert.deepEqual(sizes[0], ['21'], '正文表已套用 10.5 磅');
   assert.deepEqual(sizes[1], ['21'], '附件区的天源表也已套用 10.5 磅');
-  assert.notDeepEqual(sizes[2], ['21'], '外部 Word 表保持原样（未套用字号）');
+  assert.deepEqual(sizes[2], ['21'], '外部指纹表同样排版（指纹与天源表不可区分，跳过只会漏排）');
 });
 
 function makeDualTableDocx(path) {
@@ -496,7 +499,7 @@ print(json.dumps(res))
   return JSON.parse(out);
 }
 
-test('双表结构的第二段表头行也居中加粗，但不设成重复表头', { skip: !existsSync(SCRIPT) && '本机未安装评估工具箱' }, () => {
+test('财务双段表标题均居中加粗且不重复标题行', { skip: !existsSync(SCRIPT) && '本机未安装评估工具箱' }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'tbx-dual-'));
   const doc = makeDualTableDocx(join(dir, 'dual'));
   const env = { TIANYUAN_TABLE_FORMAT_CONFIG: JSON.stringify({ ...rules(SAMPLE), fontSizePt: 10.5 }) };
@@ -505,7 +508,7 @@ test('双表结构的第二段表头行也居中加粗，但不设成重复表�
   const states = rowStates(doc);
   assert.deepEqual(states[0].jc, ['center'], '第 0 行是真表头，居中');
   assert.deepEqual(states[0].bold, [true], '第 0 行加粗');
-  assert.equal(states[0].tblHeader, true, '第 0 行应带 tblHeader（分页重复）');
+  assert.equal(states[0].tblHeader, false, '财务双段表首页标题不应跨页重复');
 
   assert.deepEqual(states[5].jc, ['center'], '第 5 行是第二段表头，也要居中');
   assert.deepEqual(states[5].bold, [true], '第 5 行要加粗');

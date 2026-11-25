@@ -141,6 +141,40 @@ test('正文没有任何西文字体残留时报告未改动，且重复执行�
   assert.equal(third.changed, false);
 });
 
+test('声明正文固定22磅，标题与摘要不变且重复执行幂等', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'declaration-')), 'test.docx');
+  execFileSync(PY, ['-c', `
+import sys
+from docx import Document
+from docx.shared import Pt
+d=Document()
+d.add_paragraph('封面')
+d.add_heading('声   明', 1)
+d.add_paragraph('一、声明正文')
+d.add_paragraph('二、声明正文')
+d.add_heading('摘   要', 1)
+d.add_paragraph('摘要正文')
+d.save(sys.argv[1])
+`, file]);
+  const first = runNormalize(file);
+  assert.equal(first.declarationParagraphs, 2);
+  const result = JSON.parse(execFileSync(PY, ['-c', `
+import sys,json
+from docx import Document
+from docx.oxml.ns import qn
+out=[]
+for p in Document(sys.argv[1]).paragraphs:
+ s=p._p.pPr.find(qn('w:spacing')) if p._p.pPr is not None else None
+ out.append([s.get(qn('w:line')) if s is not None else None,s.get(qn('w:lineRule')) if s is not None else None])
+print(json.dumps(out))
+`, file], { encoding: 'utf8' }));
+  assert.deepEqual(result[2], ['440', 'exact']);
+  assert.deepEqual(result[3], ['440', 'exact']);
+  assert.notDeepEqual(result[1], ['440', 'exact']);
+  assert.notDeepEqual(result[5], ['440', 'exact']);
+  assert.equal(runNormalize(file).changed, false);
+});
+
 test('可以指定别的西文字体（配置真的生效）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bodyfont3-'));
   const file = join(dir, 'c.docx');

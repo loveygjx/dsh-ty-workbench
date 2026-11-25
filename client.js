@@ -4458,7 +4458,7 @@ window.__ModuleLoader__.load({
                 await new Promise(res => setTimeout(res, 2500));
                 let pr = null;
                 try { pr = await fetch(PREFIX + '/ty/export/progress?jobId=' + jobId, { cache: 'no-store' }).then(x => x.json()); } catch (_) { continue; }
-                setReportDialog(d => d && d.jobId === jobId ? { ...d, done: pr.done || 0, total: pr.total || items.length, message: pr.message || '处理中…', files: Array.isArray(pr.files) ? pr.files : [], errors: Array.isArray(pr.errors) ? pr.errors : [] } : d);
+                setReportDialog(d => d && d.jobId === jobId ? { ...d, done: pr.done || 0, total: pr.total || items.length, pct: (pr.pct == null ? null : pr.pct), message: pr.message || '处理中…', files: Array.isArray(pr.files) ? pr.files : [], errors: Array.isArray(pr.errors) ? pr.errors : [] } : d);
                 if (pr && ['done', 'failed', 'partial'].includes(pr.status)) return pr;
               }
               return { status: 'failed', message: '轮询超时' };
@@ -4504,7 +4504,11 @@ window.__ModuleLoader__.load({
           : (d.selected || []).length * (d.types || []).length;
         const canRun = d.status === 'confirm' && total > 0 && !!numericId(d.project.id)
           && (!d.outputDir || absolutePath(d.outputDir)) && (!isWeb || webOk);
-        const pct = d.total ? Math.min(100, Math.round((d.done || 0) * 100 / d.total)) : 0;
+        // 服务端给的 pct 优先：抓取阶段按 0~80 走，落盘/排版阶段继续推到 100，
+        // 只按 done/total 算会让进度条在「已全部下载、还在排版」时停住不动。
+        const pct = (d.pct != null && Number.isFinite(Number(d.pct)))
+          ? Math.max(0, Math.min(100, Math.round(Number(d.pct))))
+          : (d.total ? Math.min(100, Math.round((d.done || 0) * 100 / d.total)) : 0);
         return h(Modal, { title: '报告/说明 · 导出工作区', onClose: () => (d.status === 'running' ? null : setReportDialog(null)), style: { width: 'min(900px, 100%)', maxHeight: '92vh' } },
           h('div', { className: 'wb-hint', style: { marginBottom: 14 } }, esc(d.project.projectName || '未命名项目'), ' · ', esc(d.project.projectCode || '无编号'), ' · ID ', esc(d.project.id)),
 
@@ -4687,7 +4691,7 @@ window.__ModuleLoader__.load({
               h('b', null, pct + '%')),
             h('div', { style: { height: 8, background: 'var(--dsw-alias-bg-layer-2,#eee)', borderRadius: 4, overflow: 'hidden' } },
               h('div', { style: { height: '100%', width: pct + '%', background: 'var(--dsw-alias-brand-primary,#2f7ff0)', transition: 'width .3s' } })),
-            h('div', { className: 'wb-hint', style: { marginTop: 6 } }, '已完成 ' + (d.done || 0) + ' / ' + (d.total || total) + ' 项')),
+            h('div', { className: 'wb-hint', style: { marginTop: 6 } }, '已取回 ' + (d.done || 0) + ' / ' + (d.total || total) + ' 项')),
 
           ['done', 'partial', 'failed'].includes(d.status) && h('div', { style: { marginTop: 16 } },
             d.status === 'failed' ? h('div', { className: 'wb-alert danger' }, '导出失败：' + (d.message || '未知原因'))
@@ -4707,7 +4711,16 @@ window.__ModuleLoader__.load({
       const prepareTyExport = async (p, kind) => {
         setExpMenu(null);
         const token = uid();
-        setExportDialog({ token, project: p, kind, status: 'confirm', mode: 'auto', companies: [], selected: [], loadingCompanies: true, restoreFormulas: kind === 'detail', applyFormat: true, sourcePath: '', outputDir: '' });
+        setExportDialog({ token, project: p, kind, status: 'confirm', mode: 'auto', companies: [], selected: [], loadingCompanies: true, restoreFormulas: kind === 'detail', applyFormat: true, sourcePath: '', outputDir: '', footers: {}, footerLoading: true, footerDirty: false, footerSaving: false, footerCompany: '', footerBatch: { preparer: false, date: false, appraisers: false }, footerBatchValues: { preparer: '', date: '', appraisers: '' } });
+        try {
+          const projectId = numericId(p.id);
+          if (!projectId) throw new Error('项目 ID 不是有效数字');
+          const data = await api('/ty/export/footers?projectId=' + projectId);
+          if (!data || data.ok !== true || !data.footers || typeof data.footers !== 'object' || Array.isArray(data.footers)) throw new Error('页脚数据格式无法识别');
+          setExportDialog(d => d && d.token === token ? { ...d, footers: data.footers, footerLoading: false } : d);
+        } catch (e) {
+          setExportDialog(d => d && d.token === token ? { ...d, footerLoading: false, footerError: String(e.message || e) } : d);
+        }
         try {
           const projectId = numericId(p.id);
           if (!projectId) throw new Error('项目 ID 不是有效数字');
@@ -4741,8 +4754,20 @@ window.__ModuleLoader__.load({
           setExportDialog(prev => prev && prev.status === 'confirm' && prev.sourcePath === dir ? { ...prev, sourceFiles: data.files, filesTruncated: data.truncated } : prev);
         } catch (e) { toast('读取工作簿失败：' + String(e.message || e), 'danger'); }
       };
+      const saveExportFooters = async d => {
+        if (!d || d.footerSaving || d.footerLoading || d.footerError || !d.footerDirty) return;
+        setExportDialog(prev => prev && prev.token === d.token ? { ...prev, footerSaving: true } : prev);
+        try {
+          const result = await api('/ty/export/footers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: String(numericId(d.project.id)), footers: d.footers }) });
+          if (!result || result.ok !== true) throw new Error('保存未确认');
+          setExportDialog(prev => prev && prev.token === d.token ? { ...prev, footerSaving: false, footerDirty: false, footerSaved: true } : prev);
+        } catch (e) {
+          setExportDialog(prev => prev && prev.token === d.token ? { ...prev, footerSaving: false, footerSaveError: String(e.message || e) } : prev);
+        }
+      };
       const runTyExport = async d => {
-        if (exportBusy.current || !d || d.status !== 'confirm' || (d.kind === 'detail' && !d.restoreFormulas && !d.applyFormat)) return;
+        if (exportBusy.current || !d || d.status !== 'confirm' || d.footerSaving || (d.kind === 'detail' && !d.restoreFormulas && !d.applyFormat)) return;
+        if (d.footerDirty && !window.confirm('公司页脚有未保存的修改。继续导出将使用已保存的设置，不包含这些修改。是否继续？')) return;
         const ids = d.selected.map(numericId);
         if (d.mode === 'auto' && (!numericId(d.project.id) || !ids.length || ids.some(id => !id || !d.companies.some(c => c.id === id)))) return;
         if ((d.outputDir && !absolutePath(d.outputDir)) || (d.mode === 'manual' && (!absolutePath(d.sourcePath) || !absolutePath(d.outputDir)))) return;
@@ -5007,6 +5032,43 @@ window.__ModuleLoader__.load({
                 h('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1,#ddd)', marginTop: 14, paddingTop: 12 } }, h('b', null, '处理选项'),
                   d.kind === 'detail' && h('label', { style: { display: 'block', marginTop: 8 } }, h('input', { type: 'checkbox', checked: d.restoreFormulas, disabled: d.status !== 'confirm', onChange: e => update({ restoreFormulas: e.target.checked }) }), ' 恢复公式'),
                   h('label', { style: { display: 'block', marginTop: 8 } }, h('input', { type: 'checkbox', checked: d.kind === 'declare' || d.applyFormat, disabled: d.status !== 'confirm' || d.kind === 'declare', onChange: e => update({ applyFormat: e.target.checked }) }), d.kind === 'declare' ? ' 设置申报表打印格式（必选）' : ' 设置打印格式')))),
+              d.mode === 'auto' && (() => {
+                // 导出页脚：按公司分别配置；批量勾选字段后填一次可应用到所有已勾选公司。
+                const setFooter = (cid, patch) => {
+                  const cur = (d.footers && d.footers[cid]) || { preparer: '', date: '', appraisers: '' };
+                  update({ footers: { ...d.footers, [cid]: { ...cur, ...patch } }, footerDirty: true, footerSaved: false, footerSaveError: '' });
+                };
+                const applyBatch = () => {
+                  const vals = {};
+                  for (const k of ['preparer', 'date', 'appraisers']) if (d.footerBatch[k]) vals[k] = d.footerBatchValues[k];
+                  if (!Object.keys(vals).length) { toast('请先勾选要批量填充的字段', 'danger'); return; }
+                  const next = { ...d.footers };
+                  for (const cid of d.selected) next[cid] = { ...((d.footers && d.footers[cid]) || { preparer: '', date: '', appraisers: '' }), ...vals };
+                  update({ footers: next, footerDirty: true, footerSaved: false, footerSaveError: '' });
+                };
+                const footerInput = (cid, field, label, width) => h(Inp, { value: ((d.footers && d.footers[cid] && d.footers[cid][field]) || ''), disabled: d.status !== 'confirm', onChange: e => setFooter(cid, { [field]: e.target.value }), placeholder: label, style: { width } });
+                return h('div', { className: 'wb-sec', style: { margin: 0, gridColumn: '1 / -1' } },
+                  h('div', { className: 'wb-sec-h' }, h('h2', null, '导出页脚'), d.footerDirty ? h('span', { className: 'wb-tag warn' }, '未保存') : d.footerSaved ? h('span', { className: 'wb-tag grey' }, '已保存') : h('span', { className: 'wb-tag grey' }, d.kind === 'detail' ? '明细表含评估人员' : '申报表不含评估人员'),
+                    h(Btn, { className: 'sm', disabled: d.status !== 'confirm' || !d.footerDirty || d.footerSaving || d.footerLoading, onClick: () => saveExportFooters(d) }, d.footerSaving ? '保存中…' : '保存页脚')),
+                  d.footerLoading ? h('div', { className: 'wb-hint' }, '正在读取页脚配置…')
+                    : d.footerError ? h('div', { className: 'wb-alert danger' }, '读取页脚失败：' + d.footerError + '。导出将不写入页脚。')
+                    : h('div', null,
+                      h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 } },
+                        h('span', { className: 'wb-hint' }, '批量填充到已勾选公司：'),
+                        ['preparer', 'date', 'appraisers'].filter(k => k !== 'appraisers' || d.kind === 'detail').map(k => h('label', { key: k, style: { display: 'inline-flex', alignItems: 'center', gap: 4 } }, h('input', { type: 'checkbox', checked: d.footerBatch[k], disabled: d.status !== 'confirm', onChange: e => update({ footerBatch: { ...d.footerBatch, [k]: e.target.checked } }) }), k === 'preparer' ? '填表人' : k === 'date' ? '填表日期' : '评估人员')),
+                        h(Inp, { value: d.footerBatchValues.preparer, disabled: d.status !== 'confirm' || !d.footerBatch.preparer, onChange: e => update({ footerBatchValues: { ...d.footerBatchValues, preparer: e.target.value } }), placeholder: '填表人', style: { width: 120 } }),
+                        h(Inp, { value: d.footerBatchValues.date, disabled: d.status !== 'confirm' || !d.footerBatch.date, onChange: e => update({ footerBatchValues: { ...d.footerBatchValues, date: e.target.value } }), placeholder: '填表日期', style: { width: 120 } }),
+                        d.kind === 'detail' && h(Inp, { value: d.footerBatchValues.appraisers, disabled: d.status !== 'confirm' || !d.footerBatch.appraisers, onChange: e => update({ footerBatchValues: { ...d.footerBatchValues, appraisers: e.target.value } }), placeholder: '评估人员', style: { width: 140 } }),
+                        h(Btn, { className: 'sm', disabled: d.status !== 'confirm' || !d.selected.length, onClick: applyBatch }, '应用到所选公司')),
+                      !d.companies.length ? h('div', { className: 'wb-hint' }, '暂无公司，无法配置页脚。') : h('div', { style: { maxHeight: 200, overflow: 'auto', border: '1px solid var(--dsw-alias-border-l1,#ddd)', borderRadius: 8, padding: 8 } },
+                        d.companies.filter(c => d.selected.includes(c.id)).map(c => h('div', { key: c.id, style: { display: 'flex', gap: 6, alignItems: 'center', padding: '4px 0', flexWrap: 'wrap' } },
+                          h('span', { style: { minWidth: 150, fontSize: 12 } }, esc(c.name)),
+                          footerInput(c.id, 'preparer', '填表人', 110),
+                          footerInput(c.id, 'date', '填表日期', 110),
+                          d.kind === 'detail' && footerInput(c.id, 'appraisers', '评估人员', 130))),
+                        !d.companies.some(c => d.selected.includes(c.id)) && h('div', { className: 'wb-hint' }, '请先在左侧勾选公司；页脚按公司分别保存。')),
+                      h('div', { className: 'wb-hint', style: { marginTop: 6 } }, '汇总表、设定信息等非明细工作表不写页脚；页脚在格式整理之后写入，申报表不会出现「评估人员」。手动整理模式无法绑定公司，不应用页脚。')));
+              })(),
             d.status === 'confirm' && h('p', { className: 'wb-hint' }, d.mode === 'auto' ? '请先选择至少一家公司并确认；确认前不会导出。' : '请填写源文件或文件夹和现有输出目录的绝对路径，确认后开始整理。'),
             d.status === 'running' && (() => {
               const p = d.progress || {};
@@ -5031,7 +5093,8 @@ window.__ModuleLoader__.load({
               files.length > 0 && h('div', { style: { marginTop: 14 } }, h('b', null, '逐文件结果与对比报告'), files.map((file, i) => h('div', { key: i, className: 'wb-alert ' + (file.ok ? '' : 'danger'), style: { marginTop: 8 } }, h('div', { style: { minWidth: 0, width: '100%' } },
                 h('div', { className: 't' }, file.ok ? '处理成功' : '处理失败'),
                 pathRow('源文件', file.sourcePath, false), pathRow('输出文件', file.outputPath, false), pathRow('对比报告', file.reportPath, false),
-                file.reason && h('div', { style: { color: 'var(--wb-danger-ink)', overflowWrap: 'anywhere', marginTop: 6 } }, file.reason)))))),
+                file.reason && h('div', { style: { color: 'var(--wb-danger-ink)', overflowWrap: 'anywhere', marginTop: 6 } }, file.reason),
+                Array.isArray(file.warnings) && file.warnings.map((warning, wi) => h('div', { key: wi, className: 'wb-hint', style: { marginTop: 6 } }, '注意：' + warning))))))),
             h('div', { className: 'wb-form-foot' }, h(Btn, { onClick: closeExportDialog, disabled: d.status === 'running' }, d.status === 'confirm' ? '取消' : '关闭'),
               d.status === 'confirm' && h(Btn, { variant: 'pri', disabled: !canRun, onClick: () => runTyExport(d) }, d.mode === 'auto' ? '确认导出并整理' : '确认整理')));
         })(),

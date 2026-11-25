@@ -120,7 +120,12 @@ export async function runManualWorkflow(options) {
         await copyFile(generated, stage, 0);
         stages.push('restore_formulas');
       }
-      if (format) { await run(py, [join(skills, formats[kind]), stage, '--no-backup']); stages.push('apply_format'); }
+      // 申报脚本跳过自带插删行（--skip-fill），格式动作保留。
+      if (format) {
+        const fmtArgs = [join(skills, formats[kind]), stage, '--no-backup'];
+        if (kind === 'declare') fmtArgs.push('--skip-fill');
+        await run(py, fmtArgs); stages.push('apply_format');
+      }
       const verify = async p => run(py, ['-c', 'import sys,zipfile; sys.exit(0 if zipfile.ZipFile(sys.argv[1]).testzip() is None else 2)', p]);
       await verify(stage);
       const report = join(temp, stem + '_链接恢复对比报告.xlsx');

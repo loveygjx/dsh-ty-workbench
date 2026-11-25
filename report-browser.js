@@ -394,18 +394,26 @@ export async function downloadAttachment(attachId, { bin, timeout = 300000 } = {
  * items: [{companyId, companyName, type, mode:'current'|'refresh'}]
  * 返回 { ok, files:[{companyId,companyName,type,version,base64,fileName}], errors:[], logs:[] }
  */
-export async function exportReports({ projectId, items, pollMs = 8000, maxWaitMs = 600000, bin, onLog } = {}) {
+export async function exportReports({ projectId, items, pollMs = 8000, maxWaitMs = 600000, bin, onLog, onProgress } = {}) {
   ACTIVE += 1;
   try {
-    return await digestReports({ projectId, items, pollMs, maxWaitMs, bin, onLog });
+    return await digestReports({ projectId, items, pollMs, maxWaitMs, bin, onLog, onProgress });
   } finally {
     ACTIVE -= 1;
   }
 }
 
-async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 600000, bin, onLog } = {}) {
+async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 600000, bin, onLog, onProgress } = {}) {
   const out = { ok: false, files: [], errors: [], logs: [] };
   const log = (m) => { out.logs.push(m); try { if (onLog) onLog(m); } catch { /* noop */ } };
+  // 进度回调：done 只统计「已取回」的项，message 给人看当前在干什么。
+  // 抓取阶段占整体进度的 0~80%，落盘/格式化阶段由调用方接着推到 100%，
+  // 因为下载完还要逐份校验、归正字体、排表格，那段时间用户同样在等。
+  const total = (items || []).length;
+  const progress = (done, message) => {
+    try { if (onProgress) onProgress({ done: Math.max(0, Math.min(done, total)), total, message: message || '' }); }
+    catch { /* noop */ }
+  };
 
   // 只对「准备页面」这一步做桥接自愈：下载/轮询中途重试会重复提交作业，不能整体重跑
   let host;
@@ -451,6 +459,7 @@ async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 6000
     const it = items[i];
     const label = TYPE_LABEL[Number(it.type)] || ('类型' + it.type);
     const tag = '[' + (i + 1) + '/' + items.length + '] ' + (it.companyName || it.companyId) + ' · ' + label;
+    progress(i, '正在取回 ' + tag);
     try {
       let target = null;
       if (it.mode === 'refresh') {
@@ -460,6 +469,7 @@ async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 6000
         log(tag + '：任务 ' + jobId + ' 已提交（基线 V' + baseVer + '），等待生成…');
         const t0 = Date.now();
         while (Date.now() - t0 < maxWaitMs) {
+          progress(i, tag + '：等待天源生成…');
           await new Promise((r) => setTimeout(r, pollMs));
           const rows = await listReports(projectId, { bin, prepared: true });
           const mine = rows.filter((r) => r.companyId === String(it.companyId) && r.type === Number(it.type)
@@ -484,6 +494,7 @@ async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 6000
         target = mine[0];
       }
 
+      progress(i, tag + '：下载 V' + target.version);
       log(tag + '：下载 V' + target.version);
       const dl = await downloadAttachment(target.attachId, { bin });
       const safeName = String(it.companyName || target.companyName || it.companyId).replace(/[\\/:*?"<>|]/g, '_');
@@ -500,6 +511,7 @@ async function digestReports({ projectId, items, pollMs = 8000, maxWaitMs = 6000
       out.errors.push(tag + '：' + String((e && e.message) || e));
       log(tag + '：失败 ' + String((e && e.message) || e));
     }
+    progress(i + 1, '已取回 ' + (i + 1) + ' / ' + items.length + ' 项');
   }
 
   if (host && host.opened && host.openedPage) {
